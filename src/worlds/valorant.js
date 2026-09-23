@@ -138,7 +138,6 @@ export default {
   accent: '#ff4655',
   pixel: false,
   dustTint: 0xf2e6d0,
-  goalHint: 'DEFUSER READY — REACH THE SPIKE!',
   clearText: 'SPIKE DEFUSED',
 
   paintSky(ctx, W, H) {

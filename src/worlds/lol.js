@@ -121,7 +121,6 @@ export default {
   accent: '#c8aa6e',
   pixel: false,
   dustTint: 0xbfeee0,
-  goalHint: 'THE ENEMY NEXUS IS EXPOSED!',
   clearText: 'VICTORY',
 
   paintSky(ctx, W, H) {

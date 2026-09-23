@@ -117,7 +117,7 @@ export const ui = {
     show('touch', false);
     $('clearKicker').textContent = `WORLD ${i + 1} OF ${WORLDS.length} COMPLETE`;
     $('clearTitle').textContent = world.clearText || `${world.name} CLEARED!`;
-    $('clearSweets').innerHTML = sweetImgs(3, 3);
+    $('clearSweets').innerHTML = sweetImgs(3, run.levelSweets);
     $('clearDeaths').textContent = run.levelDeaths;
     $('clearTotal').textContent = `${run.totalSweets}/${WORLDS.length * 3}`;
     $('clearTime').textContent = fmtTime(run.elapsed);
@@ -142,7 +142,9 @@ export const ui = {
     screen = 'finale';
     show('hud', false);
     show('touch', false);
-    $('finaleSweets').innerHTML = sweetImgs(WORLDS.length * 3, WORLDS.length * 3);
+    const total = WORLDS.length * 3;
+    $('finaleSweets').innerHTML = sweetImgs(total, run.totalSweets);
+    $('finCount').textContent = run.totalSweets === total ? 'All fifteen franui collected.' : `${run.totalSweets} of ${total} franui collected.`;
     $('finDeaths').textContent = run.deaths;
     $('finTime').textContent = fmtTime(run.elapsed);
     const conf = $('confetti');

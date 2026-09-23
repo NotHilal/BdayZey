@@ -114,7 +114,9 @@ export class GameScene extends Phaser.Scene {
 
     // --- checkpoints & goal
     this.checkpoints = level.ents.checkpoints.map((k) => ({ ...k, obj: world.checkpoint(this, k), on: false }));
+    // the exit is always open; franui are optional collectibles
     this.goal = world.goal(this, level.ents.goal);
+    this.goal.activate();
 
     // --- player
     this.start = level.ents.start;
@@ -277,8 +279,7 @@ export class GameScene extends Phaser.Scene {
     // goal
     const z = this.goal.zone;
     if (px < z.x + z.w && px + pw > z.x && py < z.y + z.h && py + ph > z.y) {
-      if (run.levelSweets >= 3) this.win();
-      else if (!this.goalNag || time - this.goalNag > 2500) { this.goalNag = time; ui.toast(`FIND ALL 3 FRANUI FIRST · ${run.levelSweets}/3`); sfx.nope(); }
+      this.win();
     }
     run.elapsed += delta;
   }
@@ -324,9 +325,8 @@ export class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: txt, y: txt.y - 50, alpha: 0, duration: 1100, ease: 'Cubic.out', onComplete: () => txt.destroy() });
     ui.sweets(run.levelSweets);
     if (run.levelSweets >= 3) {
-      this.goal.activate();
       sfx.unlock();
-      this.time.delayedCall(700, () => ui.toast(this.world.goalHint || 'THE EXIT IS OPEN!'));
+      this.time.delayedCall(700, () => ui.toast('ALL 3 FRANUI FOUND!'));
     }
   }
 

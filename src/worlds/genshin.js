@@ -185,7 +185,6 @@ export default {
   accent: '#7ff0ff',
   pixel: false,
   dustTint: 0xeafff0,
-  goalHint: 'TELEPORT WAYPOINT UNLOCKED!',
   clearText: 'MONDSTADT CLEARED!',
 
   paintSky(ctx, W, H) {

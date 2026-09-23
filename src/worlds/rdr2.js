@@ -188,7 +188,6 @@ export default {
   accent: '#e8472f',
   pixel: false,
   dustTint: 0xe8c9a0,
-  goalHint: "THE GANG'S CAMPFIRE IS LIT!",
   clearText: 'HONOR INCREASED',
 
   paintSky(ctx, W, H) {
