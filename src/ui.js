@@ -1,6 +1,10 @@
 import { run, fmtTime } from './state.js';
-import { sfx } from './sfx.js';
+import { sfx, music } from './sfx.js';
 import { WORLDS } from './worlds/index.js';
+import { duo } from './duo.js';
+import { net } from './net.js';
+
+const EMOJI = { cat: '🐱', raccoon: '🦝' };
 
 const $ = (id) => document.getElementById(id);
 let game = null;
@@ -22,7 +26,7 @@ function sweetImgs(n, got) {
 }
 
 export const ui = {
-  touch: { left: false, right: false, jump: false },
+  touch: { left: false, right: false, jump: false, action: false },
 
   get screen() { return screen; },
 
@@ -38,16 +42,17 @@ export const ui = {
       x.drawImage(frame.source.image, frame.cutX, frame.cutY, frame.cutWidth, frame.cutHeight, 0, 0, c.width, c.height);
     });
 
-    $('startBtn').addEventListener('click', () => this.begin());
+    $('startBtn').addEventListener('click', () => { duo.reset(); this.begin(); });
+    this.initDuo();
     $('nextBtn').addEventListener('click', () => this.next());
     $('replayBtn').addEventListener('click', () => this.replay());
     $('muteBtn').addEventListener('click', () => { $('muteBtn').textContent = sfx.toggle() ? '🔇' : '🔊'; });
     $('muteBtn').textContent = sfx.muted ? '🔇' : '🔊';
 
     window.addEventListener('keydown', (e) => {
-      if (e.repeat) return;
+      if (e.repeat || e.target.tagName === 'INPUT') return;
       const go = e.code === 'Enter' || e.code === 'Space';
-      if (screen === 'title' && go) { e.preventDefault(); this.begin(); }
+      if (screen === 'title' && go && $('duoPanel').hidden) { e.preventDefault(); this.begin(); }
       else if (screen === 'clear' && (go || e.code === 'ArrowRight' || e.code === 'KeyD')) { e.preventDefault(); this.next(); }
     });
 
@@ -63,7 +68,7 @@ export const ui = {
         el.addEventListener('pointercancel', off);
         el.addEventListener('pointerleave', off);
       };
-      bind('tLeft', 'left'); bind('tRight', 'right'); bind('tJump', 'jump');
+      bind('tLeft', 'left'); bind('tRight', 'right'); bind('tJump', 'jump'); bind('tAct', 'action');
     }
     this.coarse = coarse;
 
@@ -77,6 +82,8 @@ export const ui = {
     } else {
       startWorld(0, 'attract');
     }
+    // invite link: ?room=ABCD opens the duo lobby and joins
+    if (q.has('room')) { this.openDuo(true); $('codeIn').value = q.get('room').toUpperCase(); this.joinDuo(); }
 
     setInterval(() => { if (screen === 'play') $('hudTimer').textContent = '⏱ ' + fmtTime(run.elapsed); }, 100);
   },
@@ -89,11 +96,112 @@ export const ui = {
     startWorld(0);
   },
 
+  // ------------------------------------------------------------------ duo lobby
+  initDuo() {
+    let pick = 'cat';
+    $('duoBtn').addEventListener('click', () => this.openDuo(true));
+    $('duoBack').addEventListener('click', () => { duo.reset(); this.openDuo(false); });
+    document.querySelectorAll('.pick').forEach((b) => b.addEventListener('click', () => {
+      pick = b.dataset.char;
+      document.querySelectorAll('.pick').forEach((o) => o.classList.toggle('on', o === b));
+    }));
+    $('createBtn').addEventListener('click', async () => {
+      sfx.init();
+      this.duoNote('');
+      try {
+        const code = await duo.create(pick, () => {
+          $('duoStatus').textContent = `${EMOJI[duo.partner]} Your partner is here!`;
+          show('duoStartBtn', true);
+          $('duoStartBtn').focus();
+        });
+        this.duoRoom(code, 'Waiting for your partner… send them the code or the link.');
+      } catch (err) { this.duoNote(err.message); }
+    });
+    $('joinBtn').addEventListener('click', () => this.joinDuo());
+    $('codeIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.joinDuo(); });
+    $('duoStartBtn').addEventListener('click', () => { net.send('start'); this.beginDuo(); });
+    $('copyBtn').addEventListener('click', async () => {
+      const link = `${location.origin}${location.pathname}?room=${duo.code}`;
+      try { await navigator.clipboard.writeText(link); $('copyBtn').textContent = 'COPIED ✓'; } catch { $('copyBtn').textContent = link; }
+    });
+    $('soloBtn').addEventListener('click', () => { duo.reset(); this.partnerLost(false); });
+    // messages that move both players through the screens together
+    net.on('start', () => { if (screen === 'title' && duo.connected) this.beginDuo(); });
+    // the partner may press "next" before our own clear screen is up: remember it
+    net.on('next', (d) => {
+      if (!duo.active) return;
+      if (this.clearIndex === d.i && screen.startsWith('clear')) { screen = 'clear'; this.next(true); }
+      else this.pendingNext = d.i;
+    });
+    net.on('replay', () => { if (duo.active && screen === 'finale') this.replay(true); });
+  },
+
+  openDuo(on) {
+    show('titleMain', !on);
+    show('duoPanel', on);
+    show('duoChoose', true);
+    show('duoRoom', false);
+    show('duoStartBtn', false);
+    this.duoNote(net.online ? '' : 'Test mode: no Supabase keys are set, so Duo only links tabs of this same browser. See README.');
+  },
+
+  async joinDuo() {
+    const code = $('codeIn').value.trim().toUpperCase();
+    if (code.length !== 4) { this.duoNote('Room codes have 4 letters.'); return; }
+    sfx.init();
+    this.duoNote('Connecting…');
+    try {
+      await duo.join(code);
+      this.duoNote(net.online ? '' : 'Test mode (same browser only).');
+      this.duoRoom(code, `${EMOJI[duo.me]} Connected! You play the ${duo.me}. Waiting for the host to start…`);
+      show('copyBtn', false);
+    } catch (err) { this.duoNote(err.message); }
+  },
+
+  duoRoom(code, status) {
+    show('duoChoose', false);
+    show('duoRoom', true);
+    show('copyBtn', true);
+    $('copyBtn').textContent = 'COPY INVITE LINK';
+    $('roomCode').textContent = code;
+    $('duoStatus').textContent = status;
+  },
+
+  duoNote(msg) { $('duoNote').textContent = msg; },
+
+  beginDuo() {
+    duo.active = true;
+    show('duoPanel', false);
+    show('titleMain', true);
+    this.begin();
+  },
+
+  // partner dropped: pause and offer to carry on alone
+  partnerLost(on) {
+    if (!duo.active && on) return;
+    show('lostOverlay', on);
+    const s = game && scene();
+    if (!s || screen !== 'play') return;
+    if (on && s.sys.isActive()) s.scene.pause();
+    else if (!on && s.sys.isPaused()) s.scene.resume();
+    this.partnerChip();
+  },
+
+  partnerChip() {
+    const el = $('hudPartner');
+    el.hidden = !duo.active;
+    if (!duo.active) return;
+    el.innerHTML = `${EMOJI[duo.partner]} PARTNER <i class="dot ${duo.lost ? 'off' : 'on'}"></i>`;
+  },
+
   worldStart(i, world) {
     run.newWorld();
     screen = 'play';
     show('hud', true);
     show('touch', this.coarse);
+    show('tAct', duo.active);
+    this.partnerChip();
+    this.countdown(null);
     document.documentElement.style.setProperty('--accent', world.accent);
     $('hudWorld').textContent = `${i + 1} · ${world.name}`;
     this.sweets(0);
@@ -101,6 +209,15 @@ export const ui = {
   },
 
   sweets(n) { $('hudSweets').innerHTML = sweetImgs(3, n); },
+
+  // big set-piece timer under the HUD (Valorant spike); null hides it
+  countdown(sec, label = '') {
+    const el = $('countdown');
+    if (sec == null) { el.hidden = true; return; }
+    el.hidden = false;
+    el.classList.toggle('urgent', sec <= 5);
+    el.innerHTML = `<small>${label}</small>${sec.toFixed(1)}`;
+  },
   deaths(n) { $('hudDeaths').textContent = '💀 ' + n; },
 
   toast(msg) {
@@ -113,7 +230,8 @@ export const ui = {
 
   worldCleared(i, world) {
     screen = 'clear';
-    this.touch.left = this.touch.right = this.touch.jump = false;
+    this.countdown(null);
+    this.touch.left = this.touch.right = this.touch.jump = this.touch.action = false;
     show('touch', false);
     $('clearKicker').textContent = `WORLD ${i + 1} OF ${WORLDS.length} COMPLETE`;
     $('clearTitle').textContent = world.clearText || `${world.name} CLEARED!`;
@@ -127,11 +245,15 @@ export const ui = {
     // ignore inputs for a moment so a held key doesn't skip the screen
     screen = 'clear-wait';
     clearTimeout(clearTimer);
-    clearTimer = setTimeout(() => { screen = 'clear'; $('nextBtn').focus(); }, 700);
+    clearTimer = setTimeout(() => {
+      screen = 'clear'; $('nextBtn').focus();
+      if (duo.active && this.pendingNext === i) { this.pendingNext = null; this.next(true); }
+    }, 700);
   },
 
-  next() {
+  next(fromPartner = false) {
     if (screen !== 'clear') return;
+    if (duo.active && !fromPartner) net.send('next', { i: this.clearIndex });
     show('clearOverlay', false);
     const n = this.clearIndex + 1;
     if (n < WORLDS.length) { screen = 'play'; startWorld(n); }
@@ -140,6 +262,7 @@ export const ui = {
 
   finale() {
     screen = 'finale';
+    music.play('birthday');
     show('hud', false);
     show('touch', false);
     const total = WORLDS.length * 3;
@@ -147,6 +270,7 @@ export const ui = {
     $('finCount').textContent = run.totalSweets === total ? 'All fifteen franui collected.' : `${run.totalSweets} of ${total} franui collected.`;
     $('finDeaths').textContent = run.deaths;
     $('finTime').textContent = fmtTime(run.elapsed);
+    show('finDuo', duo.active);
     const conf = $('confetti');
     conf.innerHTML = '';
     if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -168,7 +292,8 @@ export const ui = {
     finaleCycle = setInterval(() => { w = (w + 1) % WORLDS.length; startWorld(w, 'finale'); }, 8000);
   },
 
-  replay() {
+  replay(fromPartner = false) {
+    if (duo.active && !fromPartner) net.send('replay');
     clearInterval(finaleCycle);
     show('finaleOverlay', false);
     this.begin();

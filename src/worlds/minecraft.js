@@ -1,6 +1,9 @@
 import Phaser from 'phaser';
-import { makeCanvas, rng, fbm, vGradient, glow, addTexture } from '../art/util.js';
+import { makeCanvas, rng, fbm, vGradient, addTexture } from '../art/util.js';
 import { TILE, TOP, ROWS } from '../levels.js';
+import { colX, rowFeet } from '../mechanics.js';
+import { sfx } from '../sfx.js';
+import { ui } from '../ui.js';
 
 // Real Minecraft block textures (16x16), drawn at 4x so one block = one tile.
 const TEX = [
@@ -59,12 +62,52 @@ function oakTree(ctx, x, groundY, scale, r, birch = false) {
   }
 }
 
+// Creeper, front view like the mob in the hills, from the real skin (64x32).
+function creeperTexture() {
+  const skin = T.creeper;
+  const { canvas, ctx } = makeCanvas(8 * PX, 26 * PX);
+  ctx.imageSmoothingEnabled = false;
+  const part = (sx, sy, w, h, dx, dy) => ctx.drawImage(skin, sx, sy, w, h, dx * PX, dy * PX, w * PX, h * PX);
+  part(8, 8, 8, 8, 0, 0);     // head (face)
+  part(20, 20, 8, 12, 0, 8);  // body
+  part(4, 20, 4, 6, 0, 20);   // legs
+  part(4, 20, 4, 6, 4, 20);
+  return canvas;
+}
+
+// Side-view pig in Minecraft's blocky style (texel grid, 4px per texel).
+function pigTexture(step) {
+  const W = 25, H = 16;
+  const { canvas, ctx } = makeCanvas(W * PX, H * PX);
+  const r = rng(61);
+  const px = (x, y, w, h, base, vary = true) => {
+    for (let i = 0; i < w; i++) for (let j = 0; j < h; j++) {
+      const k = vary ? r() : 0.5;
+      ctx.fillStyle = k < 0.2 ? '#e8969a' : k > 0.85 ? '#f7b9bb' : base;
+      ctx.fillRect((x + i) * PX, (y + j) * PX, PX, PX);
+    }
+  };
+  const legs = step ? [4, 13] : [3, 14];
+  legs.forEach((a) => { px(a, 10, 4, 5, '#eea3a6'); px(a, 15, 4, 1, '#c98085', false); });
+  px(2, 2, 16, 8, '#f0a8aa');                 // body
+  px(2, 9, 16, 1, '#d98d91', false);          // belly shadow
+  px(15, 0, 9, 8, '#f3adaf');                 // head
+  px(24, 3, 1, 3, '#f5b3b5', false);          // snout
+  ctx.fillStyle = '#e7959a'; ctx.fillRect(21 * PX, 3 * PX, 3 * PX, 3 * PX);
+  ctx.fillStyle = '#a0585e'; ctx.fillRect(22 * PX, 4 * PX, PX, PX); ctx.fillRect(24 * PX, 4 * PX, PX, PX);
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(19 * PX, 2 * PX, PX, PX);
+  ctx.fillStyle = '#1b1b1b'; ctx.fillRect(20 * PX, 2 * PX, PX, PX);
+  ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.fillRect(2 * PX, 2 * PX, 13 * PX, PX);
+  return canvas;
+}
+
 export default {
   key: 'minecraft',
   name: 'MINECRAFT',
   blurb: 'Overworld · Plains',
   accent: '#7fd34e',
-  hudBg: 'rgba(24,18,12,.72)',
+  caveColor: 0x0b0806,
+  lateGoal: true, // the portal lights up as you walk up to it
 
   preload(scene) {
     TEX.forEach((n) => { if (!scene.textures.exists('mc_' + n)) scene.load.image('mc_' + n, `assets/mc/${n}.png`); });
@@ -312,9 +355,10 @@ export default {
     scene.textures.get('mc_obsidian').setFilter(Phaser.Textures.FilterMode.NEAREST);
     cont.add(obs);
     const inner = [];
-    for (let i = 1; i < 3; i++) for (let j = 1; j < 4; j++) {
+    for (let j = 1; j < 4; j++) for (let i = 1; i < 3; i++) {
       const s = scene.add.sprite(left + i * TILE, bottom - (j + 1) * TILE, 'mc_portal').setOrigin(0, 0).setScale(PX).setAlpha(0);
       s.play({ key: 'mc-portal', startFrame: (i + j * 5) % 32 });
+      s.row = j;
       inner.push(s);
     }
     cont.add(inner);
@@ -323,8 +367,17 @@ export default {
     return {
       zone: { x: left + TILE, y: bottom - TILE * 4, w: TILE * 2, h: TILE * 3 + 4 },
       activate() {
-        scene.tweens.add({ targets: inner, alpha: 0.9, duration: 700 });
-        scene.tweens.add({ targets: glowS, alpha: 0.45, duration: 900 });
+        // flint and steel: sparks, then the portal fills from the bottom up
+        sfx.ignite();
+        const spark = scene.add.particles(left + TILE * 2, bottom - TILE * 1.2, 'fx-px', {
+          speed: { min: 80, max: 260 }, lifespan: 500, scale: { start: 1.4, end: 0 }, gravityY: 500,
+          tint: [0xffe27a, 0xffffff, 0xff9a3a], blendMode: 'ADD', emitting: false,
+        }).setDepth(30);
+        spark.explode(24);
+        scene.time.delayedCall(700, () => spark.destroy());
+        inner.forEach((s) => scene.tweens.add({ targets: s, alpha: 0.9, duration: 260, delay: 120 + (s.row - 1) * 260 }));
+        scene.cameras.main.shake(700, 0.003);
+        scene.tweens.add({ targets: glowS, alpha: 0.45, duration: 900, delay: 400 });
         parts = scene.add.particles(0, 0, 'fx-px', {
           x: { min: left + TILE, max: left + TILE * 3 }, y: { min: bottom - TILE * 4, max: bottom - TILE },
           lifespan: 1400, speedX: { min: -30, max: 30 }, speedY: { min: -40, max: 10 }, scale: { start: 1, end: 0 },
@@ -339,4 +392,67 @@ export default {
   },
 
   post(scene) {},
+
+  carrier(scene, t) {
+    if (!scene.textures.exists('w_mc_pig0')) { addTexture(scene, 'w_mc_pig0', pigTexture(0), true); addTexture(scene, 'w_mc_pig1', pigTexture(1), true); }
+    const obj = scene.add.image(0, 0, 'w_mc_pig0').setOrigin(0.5, 1).setDepth(14);
+    return {
+      obj, carryY: 16 * PX + 24,
+      tick(ms, moving) { obj.setTexture(moving && Math.floor(ms / 180) % 2 ? 'w_mc_pig1' : 'w_mc_pig0'); },
+    };
+  },
+
+  // Creeper: walks its patch; get close and it hisses, swells and explodes.
+  enemy(scene, t) {
+    if (t.kind !== 'creeper') return null;
+    if (!scene.textures.exists('w_mc_creeper')) addTexture(scene, 'w_mc_creeper', creeperTexture(), true);
+    const feet = rowFeet(t.r), x0 = colX(t.c0), x1 = colX(t.c1);
+    const spr = scene.add.image(colX(t.c), feet, 'w_mc_creeper').setOrigin(0.5, 1).setDepth(15);
+    let state, x, dir, fuse;
+    const reset = () => { state = 'walk'; x = colX(t.c); dir = 1; fuse = 0; spr.setVisible(true).setScale(1).clearTint(); };
+    reset();
+    return {
+      stompable: false,
+      update(ms, dt, p) {
+        if (state === 'gone') return;
+        if (state === 'walk') {
+          x += dir * 40 * dt;
+          if (x > x1) { x = x1; dir = -1; } else if (x < x0) { x = x0; dir = 1; }
+          spr.setPosition(x, feet);
+          if (p && Math.abs(p.x - x) < 170 && Math.abs(p.body.center.y - (feet - 50)) < 120) { state = 'fuse'; fuse = 0; sfx.fuse(); }
+          return;
+        }
+        fuse += dt;
+        const k = fuse / 1.25;
+        spr.setScale(1 + k * 0.18, 1 + k * 0.06);
+        if (Math.floor(fuse * 9) % 2) spr.setTintFill(0xffffff); else spr.clearTint();
+        if (fuse < 1.25) return;
+        // boom
+        state = 'gone';
+        spr.setVisible(false);
+        sfx.boom();
+        scene.cameras.main.shake(260, 0.012);
+        const cy = feet - 50;
+        const smoke = scene.add.particles(x, cy, 'fx-puff', {
+          speed: { min: 60, max: 260 }, lifespan: 700, scale: { start: 2.4, end: 0.4 }, alpha: { start: 0.9, end: 0 },
+          tint: [0xffffff, 0xd8d8d8, 0x9a9a9a], emitting: false,
+        }).setDepth(31);
+        smoke.explode(30);
+        scene.time.delayedCall(800, () => smoke.destroy());
+        if (p && Math.hypot(p.x - x, p.body.center.y - cy) < 200) return 'kill';
+      },
+      hitbox() { return state === 'gone' ? null : { x: spr.x - 14, y: feet - 100, w: 28, h: 100 }; },
+      reset,
+    };
+  },
+
+  setpiece(scene) {
+    return {
+      trigger(id) {
+        if (id !== 'ignite' || scene.goalOpen) return;
+        scene.openGoal();
+        ui.toast('THE PORTAL IS LIT!');
+      },
+    };
+  },
 };

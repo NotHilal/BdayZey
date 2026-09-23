@@ -1,8 +1,9 @@
 // Usage: node tools/shot.mjs <url> <out.png> [waitMs] [w] [h]
 import puppeteer from 'puppeteer-core';
+import { CHROME } from './browser.mjs';
 const [url, out, wait = '2500', w = '1280', h = '720'] = process.argv.slice(2);
 const browser = await puppeteer.launch({
-  executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  executablePath: CHROME,
   headless: 'new',
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--autoplay-policy=no-user-gesture-required'],
 });

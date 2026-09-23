@@ -162,18 +162,105 @@ function drawRaccoon(p) {
   return c;
 }
 
+// ------------------------------- cat ---------------------------------------
+// The duo partner: a fluffy seal-point Ragdoll. Cream body and white chest
+// ruff, dark brown mask, ears, legs and plume tail, blue eyes. Same canvas and
+// poses as the raccoon so hitbox and animations line up.
+const C = {
+  outline: '#1a1310',
+  point: '#5a3e2e',
+  pointDark: '#35241b',
+  cream: '#e6d6bc',
+  creamLight: '#f5ecdc',
+  creamShade: '#c9b393',
+  white: '#fbf8f1',
+  eye: '#5a95e0',
+  shine: '#ffffff',
+  nose: '#1f1510',
+  earIn: '#8c5e4c',
+};
+const C_PAL = Object.values(C);
+
+function drawCat(p) {
+  const c = makeCanvas(RACCOON.W, RACCOON.H);
+  const ctx = c.ctx;
+  const g = RACCOON.H - 1.5;
+  const bob = p.bob || 0;
+  const by = 15.5 + bob;
+
+  ctx.translate(7, 0);
+  // --- tail: long fluffy plume in the point color, carried up
+  const sway = p.tail || 0;
+  const pts = [];
+  for (let i = 0; i <= 30; i++) {
+    const t = i / 30;
+    const x = 9.5 - t * 8.5 - Math.sin(t * Math.PI) * 1.5;
+    const y = by - 3 - t * 8.5 + Math.sin(sway + t * 2.6) * t * 1.8;
+    pts.push([x, y, 2.8 + Math.sin(Math.min(1, t * 1.3) * Math.PI * 0.5) * 1.9 - Math.max(0, t - 0.9) * 8]);
+  }
+  for (const [x, y, r] of pts) ellipse(ctx, x, y, r, r, C.point);
+  for (const [x, y, r] of pts.slice(4)) ellipse(ctx, x + 0.4, y - r * 0.4, r * 0.5, r * 0.35, C.creamShade);
+
+  // --- far legs
+  const L = p.legs || [0, 0, 0, 0];
+  limb(ctx, 11.5, by + 2, g - by - 2.5, L[0], 3.2, C.pointDark, C.pointDark);
+  limb(ctx, 22.5, by + 2, g - by - 2.5, L[2], 3.2, C.pointDark, C.pointDark);
+
+  // --- body: fluffy, cream with a shaded back
+  ellipse(ctx, 17.5, by + 0.6, 8.2, 6.4, C.cream, 0.05);
+  ellipse(ctx, 13.5, by - 0.2, 6.2, 6.4, C.cream);
+  ellipse(ctx, 15.5, by - 4.6, 6.0, 2.0, C.creamShade, -0.05);
+  ellipse(ctx, 18.5, by + 4.4, 5.5, 1.8, C.creamLight, 0.05);
+  // fur tufts on the belly line
+  [11, 14.5, 18, 21.5].forEach((x) => ellipse(ctx, x, by + 6, 1.5, 1.2, C.cream));
+
+  // --- near legs: seal point legs
+  limb(ctx, 12.5, by + 2.5, g - by - 3, L[1], 3.6, C.point, C.pointDark);
+  limb(ctx, 23.5, by + 2.5, g - by - 3, L[3], 3.6, C.point, C.pointDark);
+
+  // --- head
+  const hx = 26.5 + (p.headX || 0), hy = by - 5.8 + (p.headY || 0);
+  // white chest ruff under the chin
+  ellipse(ctx, hx - 2.5, hy + 5.2, 4.6, 3.6, C.white);
+  ellipse(ctx, hx - 4.5, hy + 6.8, 3.4, 2.6, C.creamLight);
+  // ears (dark points)
+  ctx.fillStyle = C.point;
+  ctx.beginPath(); ctx.moveTo(hx - 5.2, hy - 1.2); ctx.lineTo(hx - 4.2, hy - 7.4); ctx.lineTo(hx - 0.8, hy - 3.4); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(hx - 1.4, hy - 2.8); ctx.lineTo(hx + 1.2, hy - 8.0); ctx.lineTo(hx + 3.4, hy - 2.6); ctx.fill();
+  ctx.fillStyle = C.earIn;
+  ctx.beginPath(); ctx.moveTo(hx - 0.2, hy - 3.2); ctx.lineTo(hx + 1.2, hy - 6.2); ctx.lineTo(hx + 2.2, hy - 3.2); ctx.fill();
+  // round fluffy skull and cheek fur
+  ellipse(ctx, hx, hy, 6.2, 5.6, C.cream);
+  ellipse(ctx, hx - 2.4, hy + 2.4, 3.6, 2.8, C.creamLight);
+  // seal-point mask over the face and muzzle
+  ellipse(ctx, hx + 2.6, hy + 0.9, 4.2, 3.6, C.point, 0.1);
+  ellipse(ctx, hx + 4.6, hy + 1.6, 2.8, 2.2, C.pointDark, 0.1);
+  // blue eye
+  if (!p.blink) {
+    ctx.fillStyle = C.eye; ctx.fillRect(Math.round(hx + 2), Math.round(hy - 0.8), 2, 1);
+    ctx.fillStyle = C.shine; ctx.fillRect(Math.round(hx + 2), Math.round(hy - 0.8), 1, 1);
+  } else { ctx.fillStyle = C.pointDark; ctx.fillRect(Math.round(hx + 2), Math.round(hy - 0.4), 2, 1); }
+  // nose
+  ellipse(ctx, hx + 6.8, hy + 1.2, 0.9, 0.8, C.nose);
+  if (p.mouth) { ctx.fillStyle = C.pointDark; ctx.fillRect(Math.round(hx + 4.5), Math.round(hy + 3.2), 2, 1); }
+
+  pixelize(c, C_PAL, C.outline);
+  return c;
+}
+
 const RUN_FRAMES = 8;
-export function raccoonFrames() {
+// the same poses for every character: idle x4, run x8, jump, fall, happy
+function poseFrames(draw) {
   const frames = [];
   const deg = (d) => (d * Math.PI) / 180;
   // idle breathing (4) + blink
   for (let i = 0; i < 4; i++) {
-    frames.push(drawRaccoon({ legs: [deg(-4), deg(4), deg(-3), deg(3)], bob: i === 1 || i === 2 ? 0.5 : 0, tail: i * 0.6, blink: i === 3 }));
+    frames.push(draw({ legs: [deg(-4), deg(4), deg(-3), deg(3)], bob: i === 1 || i === 2 ? 0.5 : 0, tail: i * 0.6, blink: i === 3 }));
   }
   // run cycle: rotary gallop
   for (let i = 0; i < RUN_FRAMES; i++) {
     const ph = (i / RUN_FRAMES) * Math.PI * 2;
-    frames.push(drawRaccoon({
+    frames.push(draw({
       // trot: diagonal pairs move together
       legs: [deg(Math.sin(ph + Math.PI) * 26), deg(Math.sin(ph) * 28), deg(Math.sin(ph) * 26), deg(Math.sin(ph + Math.PI) * 28)],
       bob: -Math.abs(Math.sin(ph)) * 1.1 + 0.4,
@@ -182,34 +269,45 @@ export function raccoonFrames() {
     }));
   }
   // jump (legs tucked forward/back) and fall (legs reaching)
-  frames.push(drawRaccoon({ legs: [deg(-50), deg(-40), deg(45), deg(55)], bob: -1.2, tail: 1.6, headY: -0.6, mouth: true }));
-  frames.push(drawRaccoon({ legs: [deg(25), deg(15), deg(-20), deg(-10)], bob: -0.5, tail: 3.6, headY: 0.4 }));
+  frames.push(draw({ legs: [deg(-50), deg(-40), deg(45), deg(55)], bob: -1.2, tail: 1.6, headY: -0.6, mouth: true }));
+  frames.push(draw({ legs: [deg(25), deg(15), deg(-20), deg(-10)], bob: -0.5, tail: 3.6, headY: 0.4 }));
   // happy (goal) frame
-  frames.push(drawRaccoon({ legs: [deg(-10), deg(-5), deg(25), deg(35)], bob: -0.6, headY: -1.2, tail: 2.2, mouth: true }));
+  frames.push(draw({ legs: [deg(-10), deg(-5), deg(25), deg(35)], bob: -0.6, headY: -1.2, tail: 2.2, mouth: true }));
   return frames;
 }
+export const raccoonFrames = () => poseFrames(drawRaccoon);
 
-export function buildRaccoon(scene) {
-  const frames = raccoonFrames();
+// Playable characters: texture key and animation prefix (<prefix>-idle, -run, ...)
+export const CHARACTERS = {
+  raccoon: { key: 'raccoon', anim: 'rc', draw: drawRaccoon, name: 'Raccoon' },
+  cat: { key: 'cat', anim: 'ct', draw: drawCat, name: 'Cat' },
+};
+
+export function buildRaccoon(scene) { return buildCharacter(scene, CHARACTERS.raccoon); }
+export function buildCat(scene) { return buildCharacter(scene, CHARACTERS.cat); }
+
+function buildCharacter(scene, ch) {
+  const frames = poseFrames(ch.draw);
+  const key = ch.key, pre = ch.anim;
 
   const S = RACCOON.SCALE;
   const fw = RACCOON.W * S, fh = RACCOON.H * S;
   const sheet = makeCanvas(fw * frames.length, fh);
   sheet.ctx.imageSmoothingEnabled = false;
   frames.forEach((f, i) => sheet.ctx.drawImage(f.canvas, i * fw, 0, fw, fh));
-  const tex = addTexture(scene, 'raccoon', sheet.canvas, true);
+  const tex = addTexture(scene, key, sheet.canvas, true);
   frames.forEach((_, i) => tex.add(i, 0, i * fw, 0, fw, fh));
 
   const anims = scene.anims;
   const mk = (key, list, rate, repeat = -1) => {
     if (anims.exists(key)) anims.remove(key);
-    anims.create({ key, frames: list.map((f) => ({ key: 'raccoon', frame: f })), frameRate: rate, repeat });
+    anims.create({ key, frames: list.map((f) => ({ key: ch.key, frame: f })), frameRate: rate, repeat });
   };
-  mk('rc-idle', [0, 0, 1, 2, 2, 1, 0, 0, 0, 3, 0, 0], 6);
-  mk('rc-run', Array.from({ length: RUN_FRAMES }, (_, i) => 4 + i), 16);
-  mk('rc-jump', [4 + RUN_FRAMES], 1, 0);
-  mk('rc-fall', [5 + RUN_FRAMES], 1, 0);
-  mk('rc-happy', [6 + RUN_FRAMES], 1, 0);
+  mk(pre + '-idle', [0, 0, 1, 2, 2, 1, 0, 0, 0, 3, 0, 0], 6);
+  mk(pre + '-run', Array.from({ length: RUN_FRAMES }, (_, i) => 4 + i), 16);
+  mk(pre + '-jump', [4 + RUN_FRAMES], 1, 0);
+  mk(pre + '-fall', [5 + RUN_FRAMES], 1, 0);
+  mk(pre + '-happy', [6 + RUN_FRAMES], 1, 0);
   return { fw, fh };
 }
 

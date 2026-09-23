@@ -1,7 +1,10 @@
 import Phaser from 'phaser';
 import { makeCanvas, rng, fbm, vGradient, glow, addTexture, poly, ridge, mix } from '../art/util.js';
-import { paintSmoothTerrain, capBand, speckle, wave } from '../art/terrain.js';
+import { paintSmoothTerrain, capBand, speckle } from '../art/terrain.js';
 import { TILE, TOP, ROWS } from '../levels.js';
+import { colX, rowFeet } from '../mechanics.js';
+import { sfx } from '../sfx.js';
+import { ui } from '../ui.js';
 
 // Summoner's Rift — mossy stone lanes, jungle canopy, hextech-blue light,
 // turrets along the lane and the enemy Nexus at the end.
@@ -102,6 +105,60 @@ function wardTexture(on) {
   return canvas;
 }
 
+// Teemo, chibi and facing right: scout hat with goggles, big ears.
+function teemoTexture() {
+  const { canvas, ctx } = makeCanvas(64, 72);
+  const ell = (x, y, rx, ry, c, rot = 0) => { ctx.fillStyle = c; ctx.beginPath(); ctx.ellipse(x, y, rx, ry, rot, 0, Math.PI * 2); ctx.fill(); };
+  // body + vest + feet
+  ell(30, 58, 12, 11, '#c89659');
+  ell(30, 58, 9, 10, '#5d6e32');
+  ell(24, 69, 6, 3, '#6b4a2a'); ell(37, 69, 6, 3, '#6b4a2a');
+  // ears sticking out sideways
+  ell(10, 30, 13, 6, '#c89659', 0.25); ell(11, 30, 8, 3, '#e7a3a0', 0.25);
+  ell(52, 26, 11, 5, '#b8854a', -0.35);
+  // head + muzzle
+  ell(32, 33, 16, 15, '#d9aa6a');
+  ell(40, 39, 9, 6, '#f3dcb0');
+  // hat: dome, brim, goggles
+  ctx.fillStyle = '#6f8a3c'; ctx.beginPath(); ctx.ellipse(31, 24, 17, 13, 0, Math.PI, 0); ctx.fill();
+  ell(31, 24, 20, 4, '#566d2c');
+  ctx.strokeStyle = '#c9a45a'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(34, 16, 4.5, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(43, 17, 4, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = '#9fd6e8'; ctx.beginPath(); ctx.arc(34, 16, 3, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.arc(43, 17, 2.6, 0, Math.PI * 2); ctx.fill();
+  // eyes, nose, grin
+  ell(38, 32, 3.4, 4.2, '#2a1a10'); ell(46, 32, 2.6, 3.6, '#2a1a10');
+  ctx.fillStyle = '#fff'; ctx.fillRect(38, 30, 2, 2); ctx.fillRect(46, 30, 1.5, 1.5);
+  ell(49, 38, 2.2, 1.8, '#3a2014');
+  ctx.strokeStyle = '#3a2014'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(43, 40, 3.5, 0.2, Math.PI * 0.8); ctx.stroke();
+  return canvas;
+}
+
+// Rift Scuttler: purple shell, teal crest, eyes on stalks (faces right).
+function scuttleTexture() {
+  const { canvas, ctx } = makeCanvas(96, 60);
+  ctx.strokeStyle = '#4a338f'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+  [[24, 44, 14, 58], [40, 46, 36, 59], [58, 46, 62, 59], [72, 44, 82, 58]].forEach(([a, b, c, d]) => { ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(c, d); ctx.stroke(); });
+  const g = ctx.createLinearGradient(0, 14, 0, 50);
+  g.addColorStop(0, '#b59cff'); g.addColorStop(1, '#5b3fc4');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.ellipse(46, 40, 38, 20, 0, Math.PI, 0); ctx.fill();
+  ctx.fillStyle = '#4a338f'; ctx.fillRect(8, 39, 76, 8);
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 2;
+  for (let i = -2; i <= 2; i++) { ctx.beginPath(); ctx.moveTo(46 + i * 4, 22); ctx.quadraticCurveTo(46 + i * 14, 30, 46 + i * 17, 40); ctx.stroke(); }
+  ctx.fillStyle = '#4fe3d0';
+  [[30, 22], [42, 18], [54, 18], [66, 22]].forEach(([x, y]) => { ctx.beginPath(); ctx.moveTo(x - 4, y + 6); ctx.lineTo(x, y - 8); ctx.lineTo(x + 4, y + 6); ctx.fill(); });
+  ctx.strokeStyle = '#5b3fc4'; ctx.lineWidth = 3;
+  [[80, 34, 84, 20], [86, 38, 92, 26]].forEach(([a, b, c, d]) => { ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(c, d); ctx.stroke(); });
+  ctx.fillStyle = '#ffe27a'; ctx.beginPath(); ctx.arc(84, 19, 3.5, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.arc(92, 25, 3.5, 0, Math.PI * 2); ctx.fill();
+  return canvas;
+}
+
+function enemyTurretTexture() {
+  const { canvas, ctx } = makeCanvas(130, 270);
+  turret(ctx, 65, 268, 1.4, { stone: '#4a4f5c', metal: '#5d6372', trim: '#8a6a3a', orb: '#ff4f5e', orbCore: '#fff0f0' });
+  return canvas;
+}
+
 function nexusSprite(on) {
   const { canvas, ctx } = makeCanvas(240, 280);
   nexus(ctx, 120, 280, 1, {
@@ -122,6 +179,8 @@ export default {
   pixel: false,
   dustTint: 0xbfeee0,
   clearText: 'VICTORY',
+  lateGoal: true, // the Nexus shield drops once the last turret falls
+  caveColor: 0x06140f,
 
   paintSky(ctx, W, H) {
     vGradient(ctx, 0, 0, W, H, [[0, '#07121f'], [0.4, '#0f2c3d'], [0.7, '#1f5a5c'], [1, '#3c8a74']]);
@@ -332,6 +391,110 @@ export default {
           .setOrigin(0.5).setScrollFactor(0).setDepth(300).setAlpha(0).setScale(1.6);
         scene.tweens.add({ targets: t, alpha: 1, scale: 1, duration: 400, ease: 'Back.out' });
       },
+    };
+  },
+
+  carrier(scene) {
+    if (!scene.textures.exists('w_lol_scuttle')) addTexture(scene, 'w_lol_scuttle', scuttleTexture());
+    const obj = scene.add.image(0, 0, 'w_lol_scuttle').setOrigin(0.5, 1).setDepth(14);
+    return { obj, carryY: 70, tick(ms, moving) { obj.y -= moving ? Math.abs(Math.sin(ms / 70)) * 3 : 0; } };
+  },
+
+  // Teemo hides in a brush, rustles, then pops out. Jump on him while he's up.
+  enemy(scene, t) {
+    if (t.kind !== 'teemo') return null;
+    if (!scene.textures.exists('w_lol_teemo')) addTexture(scene, 'w_lol_teemo', teemoTexture());
+    if (!scene.textures.exists('w_lol_brush0')) addTexture(scene, 'w_lol_brush0', brushTexture(1));
+    const x = colX(t.c), feet = rowFeet(t.r) + 2, H = 72;
+    const spr = scene.add.image(x, feet, 'w_lol_teemo').setOrigin(0.5, 1).setDepth(15).setFlipX(true);
+    const bush = scene.add.image(x, feet + 6, 'w_lol_brush0').setOrigin(0.5, 1).setDepth(16).setScale(1.1);
+    const offset = t.c * 530;
+    let d = H, gone = 0, laughed = false;
+    const show = (dd) => { d = dd; spr.y = feet + dd; spr.setCrop(0, 0, 64, Math.max(0, H - dd)); };
+    show(H);
+    return {
+      stompable: true,
+      update(ms, dt, p) {
+        if (gone > 0) { gone -= dt; show(H); return; }
+        const u = (ms + offset) % 3400;
+        bush.x = x + (u > 1500 && u < 1900 ? Math.sin(ms / 30) * 3 : 0);
+        if (u < 1900) { show(H); laughed = false; }
+        else if (u < 2100) {
+          show(H * (1 - (u - 1900) / 200));
+          if (!laughed && p && Math.abs(p.x - x) < 700) { laughed = true; sfx.hehe(); }
+        } else if (u < 3000) show(0);
+        else if (u < 3200) show(H * ((u - 3000) / 200));
+        else show(H);
+        if (p) spr.setFlipX(p.x < x);
+      },
+      hitbox() { return gone > 0 || d > 34 ? null : { x: x - 20, y: feet - (H - d) + 6, w: 40, h: H - d - 6 }; },
+      stomp() {
+        gone = 5;
+        show(H);
+        const poof = scene.add.particles(x, feet - 30, 'fx-puff', {
+          speed: { min: 60, max: 200 }, lifespan: 500, scale: { start: 1.2, end: 0 }, tint: [0x8fe060, 0xffffff], emitting: false,
+        }).setDepth(30);
+        poof.explode(14);
+        scene.time.delayedCall(600, () => poof.destroy());
+        ui.toast('TEEMO HAS BEEN SLAIN');
+      },
+      reset() { gone = 0; },
+    };
+  },
+
+  // The last enemy turret targets you in its range; walk past it to take it down.
+  setpiece(scene) {
+    const tx = colX(98), feet = rowFeet(7) + 4;
+    if (!scene.textures.exists('w_lol_eturret')) addTexture(scene, 'w_lol_eturret', enemyTurretTexture());
+    const tur = scene.add.image(tx, feet, 'w_lol_eturret').setOrigin(0.5, 1).setDepth(-1.5);
+    const orb = { x: tx, y: feet - 268 + 78 };
+    const orbGlow = scene.add.image(orb.x, orb.y, 'fx-dot').setScale(3).setTint(0xff4f5e).setAlpha(0.5).setBlendMode(Phaser.BlendModes.ADD).setDepth(-1);
+    const aim = scene.add.graphics().setDepth(29);
+    let bolts = [], cd = 1, aiming = 0, down = false;
+    const clear = () => { bolts.forEach((b) => b.img.destroy()); bolts = []; aim.clear(); aiming = 0; };
+    return {
+      update(ms, dt, p) {
+        aim.clear();
+        for (const b of bolts) {
+          b.img.x += b.vx * dt; b.img.y += b.vy * dt; b.life += dt;
+          if (p && Math.hypot(b.img.x - p.x, b.img.y - p.body.center.y) < 30) { clear(); return 'kill'; }
+        }
+        bolts = bolts.filter((b) => { if (b.life > 2.4) { b.img.destroy(); return false; } return true; });
+        if (down || !p) return;
+        const inRange = p.x > tx - 900 && p.x < tx + 20;
+        if (!inRange) { aiming = 0; cd = Math.max(cd, 0.6); return; }
+        const py = p.body.center.y;
+        if (aiming > 0) {
+          aiming -= dt;
+          aim.lineStyle(3, 0xff4f5e, Math.floor(ms / 60) % 2 ? 0.9 : 0.4).lineBetween(orb.x, orb.y, p.x, py);
+          orbGlow.setScale(3 + (0.55 - aiming) * 4);
+          if (aiming <= 0) {
+            const a = Math.atan2(py - orb.y, p.x - orb.x), sp = 560;
+            const img = scene.add.image(orb.x, orb.y, 'fx-dot').setScale(0.9).setTint(0xff6a5e).setBlendMode(Phaser.BlendModes.ADD).setDepth(28);
+            bolts.push({ img, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0 });
+            orbGlow.setScale(3);
+            sfx.shot();
+            cd = 1.3;
+          }
+        } else if ((cd -= dt) <= 0) aiming = 0.55;
+      },
+      trigger(id) {
+        if (id !== 'turret' || down) return;
+        down = true;
+        clear();
+        sfx.boom();
+        scene.cameras.main.shake(300, 0.01);
+        orbGlow.destroy();
+        const rubble = scene.add.particles(tx, feet - 120, 'fx-px', {
+          speed: { min: 100, max: 320 }, lifespan: 900, scale: { start: 2, end: 0 }, gravityY: 700, tint: [0x5d6372, 0x8a6a3a, 0xff4f5e], emitting: false,
+        }).setDepth(30);
+        rubble.explode(40);
+        scene.tweens.add({ targets: tur, scaleY: 0.25, alpha: 0.5, duration: 600, ease: 'Quad.in' });
+        scene.openGoal();
+        ui.toast('TURRET DESTROYED · SHIELD DOWN');
+      },
+      reset() { clear(); cd = 1; },
+      win() { clear(); },
     };
   },
 

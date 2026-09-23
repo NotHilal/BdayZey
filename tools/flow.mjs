@@ -1,7 +1,8 @@
 // Automated run: teleports the raccoon to each franui and the goal in every
 // world, clicks through the clear screens, and screenshots the finale.
 import puppeteer from 'puppeteer-core';
-const browser = await puppeteer.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: 'new', args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+import { CHROME } from './browser.mjs';
+const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new', args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 const page = await browser.newPage();
 await page.setViewport({ width: 1280, height: 720 });
 const errs = [];
@@ -21,7 +22,8 @@ for (let w = 0; w < 5; w++) {
   const info = await page.evaluate(() => { const g = window.__game; return { world: g.world.key, x: Math.round(g.player.x), dead: g.dead }; });
   console.log('world', w, JSON.stringify(info));
   for (let i = 0; i < 3; i++) {
-    await page.evaluate((i) => { const g = window.__game; const s = g.sweets[i]; g.player.body.reset(s.x, s.y - 40); }, i);
+    // franui can ride a moving carrier, so aim at where it is right now
+    await page.evaluate((i) => { const g = window.__game; const s = g.sweets[i]; g.player.body.reset(s.img.x, s.img.y - 10); }, i);
     await sleep(350);
   }
   await page.screenshot({ path: `shots/flow-w${w}-sweets.png` });

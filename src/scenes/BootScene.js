@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { buildRaccoon, buildFranui, buildFx } from '../art/sprites.js';
+import { buildRaccoon, buildCat, buildFranui, buildFx } from '../art/sprites.js';
 import { ui } from '../ui.js';
 
 // Builds the shared sprites once, waits for the pixel fonts, then hands off to the UI.
@@ -8,6 +8,7 @@ export class BootScene extends Phaser.Scene {
 
   create() {
     buildRaccoon(this);
+    buildCat(this);
     buildFranui(this);
     buildFx(this);
     const fonts = Promise.all([

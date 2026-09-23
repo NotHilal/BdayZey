@@ -1,5 +1,6 @@
 import puppeteer, { KnownDevices } from 'puppeteer-core';
-const browser = await puppeteer.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: 'new', args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+import { CHROME } from './browser.mjs';
+const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new', args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 const page = await browser.newPage();
 await page.emulate(KnownDevices['iPhone 13 landscape']);
 page.on('pageerror', (e) => console.log('PAGEERROR', e.message));

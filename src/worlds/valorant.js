@@ -1,7 +1,12 @@
 import Phaser from 'phaser';
 import { makeCanvas, rng, fbm, vGradient, glow, cloud, addTexture, poly, ridge, mix } from '../art/util.js';
-import { paintSmoothTerrain, capBand, speckle, wave } from '../art/terrain.js';
+import { paintSmoothTerrain, speckle } from '../art/terrain.js';
 import { TILE, TOP, ROWS } from '../levels.js';
+import { colX, rowFeet } from '../mechanics.js';
+import { sfx } from '../sfx.js';
+import { ui } from '../ui.js';
+
+const SPIKE_TIME = 12; // seconds to reach the Spike once it's planted
 
 // Ascent — sunny Italian town, terracotta roofs, the floating island in the
 // sky, crates on site, Brimstone's molly fires and the planted Spike.
@@ -137,6 +142,8 @@ export default {
   blurb: 'Ascent · Attacking B Site',
   accent: '#ff4655',
   pixel: false,
+  caveColor: 0x1a1410,
+  mech: { door: '#4a525e', trim: '#2a3038', plate: '#ff4655' },
   dustTint: 0xf2e6d0,
   clearText: 'SPIKE DEFUSED',
 
@@ -325,10 +332,8 @@ export default {
     scene.tweens.add({ targets: ring, width: 340, height: 70, alpha: 0, duration: 1100, repeat: -1 });
     return {
       zone: { x: gl.x - 50, y: gl.y - 110, w: 100, h: 110 },
-      activate() {
-        pulse.setTint(0x3fe0c5);
-        ring.setStrokeStyle(3, 0x3fe0c5, 0.9);
-      },
+      // the Spike stays red (armed) until you defuse it
+      activate() {},
       celebrate() {
         img.setTexture('w_val_spike1');
         scene.tweens.killTweensOf(pulse);
@@ -340,6 +345,70 @@ export default {
         scene.tweens.add({ targets: band, scaleY: 1, duration: 250 });
         scene.tweens.add({ targets: t, alpha: 1, duration: 300, delay: 150 });
       },
+    };
+  },
+
+  // Cypher trapwire gate: two anchors with laser wires that switch on and off.
+  enemy(scene, t) {
+    if (t.kind !== 'trip') return null;
+    const x = colX(t.c), feet = rowFeet(t.r), H = 236, half = 30;
+    const g = scene.add.graphics().setDepth(7);
+    const post = (px) => {
+      g.fillStyle(0x1b232d, 1).fillRect(px - 4, feet - H, 8, H);
+      g.fillStyle(0x2f3a46, 1).fillRect(px - 7, feet - H - 6, 14, 10);
+      g.fillStyle(0x2f3a46, 1).fillRect(px - 7, feet - 8, 14, 8);
+    };
+    post(x - half); post(x + half);
+    const heights = [26, 76, 126, 176, 222];
+    const wires = heights.map((h) => scene.add.rectangle(x, feet - h, half * 2, 3, 0xbff6ff).setDepth(8).setBlendMode(Phaser.BlendModes.ADD));
+    const lights = heights.map((h) => [x - half, x + half].map((px) => scene.add.image(px, feet - h, 'fx-dot').setScale(0.5).setTint(0x7ff5ff).setBlendMode(Phaser.BlendModes.ADD).setDepth(9))).flat();
+    const offset = t.c * 311;
+    let on = true;
+    return {
+      stompable: false,
+      update(ms, dt, p) {
+        const u = (ms + offset) % 3000;
+        // ON 1.5s, OFF 1.3s, then a 0.2s flicker warning
+        const now = u < 1500 || (u >= 2800 && Math.floor(u / 50) % 2 === 0);
+        const was = on;
+        on = u < 1500;
+        wires.forEach((w) => w.setAlpha(now ? 0.95 : 0.06));
+        lights.forEach((l) => l.setAlpha(now ? 1 : 0.35));
+        if (on && !was && p && Math.abs(p.x - x) < 600) sfx.zap();
+      },
+      hitbox() { return on ? { x: x - half, y: feet - H, w: half * 2, h: H } : null; },
+    };
+  },
+
+  // The Spike gets planted when you enter B site: defuse it before it blows.
+  setpiece(scene, level) {
+    const gl = level.ents.goal;
+    let left = null, beep = 0, dead = false;
+    const stop = () => { left = null; ui.countdown(null); };
+    return {
+      trigger(id) {
+        if (id !== 'plant' || left != null) return;
+        left = SPIKE_TIME; beep = 0; dead = false;
+        ui.toast('SPIKE PLANTED · DEFUSE IT!');
+        sfx.beep(true);
+      },
+      update(ms, dt, p) {
+        if (left == null || !p) return;
+        left -= dt;
+        beep -= dt;
+        if (beep <= 0) { sfx.beep(left < 4); beep = left < 4 ? 0.25 : left < 8 ? 0.5 : 1; }
+        ui.countdown(Math.max(0, left), 'SPIKE');
+        if (left > 0 || dead) return;
+        // detonation
+        dead = true;
+        stop();
+        const blast = scene.add.image(gl.x, gl.y - 60, 'fx-dot').setScale(1).setTint(0xfff0e0).setBlendMode(Phaser.BlendModes.ADD).setDepth(60);
+        scene.tweens.add({ targets: blast, scale: 60, alpha: 0, duration: 900, onComplete: () => blast.destroy() });
+        sfx.boom();
+        return 'kill';
+      },
+      reset() { stop(); },
+      win() { stop(); },
     };
   },
 

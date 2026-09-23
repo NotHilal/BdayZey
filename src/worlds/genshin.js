@@ -2,6 +2,9 @@ import Phaser from 'phaser';
 import { makeCanvas, rng, fbm, vGradient, glow, cloud, addTexture, poly, ridge, mix } from '../art/util.js';
 import { paintSmoothTerrain, capBand, speckle, wave } from '../art/terrain.js';
 import { TILE, TOP, ROWS } from '../levels.js';
+import { colX, rowFeet, pingPong } from '../mechanics.js';
+import { sfx } from '../sfx.js';
+import { ui } from '../ui.js';
 
 // Mondstadt — Starfell Valley: bright anime sky, Dragonspine in the distance,
 // the city of Mondstadt on its lake island, windmills and cel-shaded meadows.
@@ -178,6 +181,41 @@ function lampTexture(lit) {
   return canvas;
 }
 
+// Anemo Slime: a round teal jelly with a little wind swirl on top.
+function slimeTexture() {
+  const { canvas, ctx } = makeCanvas(64, 60);
+  ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.beginPath(); ctx.ellipse(32, 57, 24, 4, 0, 0, Math.PI * 2); ctx.fill();
+  const g = ctx.createRadialGradient(24, 26, 4, 32, 36, 30);
+  g.addColorStop(0, '#d9fff6'); g.addColorStop(0.45, '#8cefd9'); g.addColorStop(1, '#3fb9a4');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.moveTo(6, 54); ctx.bezierCurveTo(2, 30, 16, 14, 32, 14); ctx.bezierCurveTo(48, 14, 62, 30, 58, 54); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#2b8f80'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.beginPath(); ctx.ellipse(20, 26, 6, 4, -0.6, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#1f3f45';
+  ctx.beginPath(); ctx.ellipse(25, 38, 3, 4.5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(40, 38, 3, 4.5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.fillRect(25, 35, 2, 2); ctx.fillRect(40, 35, 2, 2);
+  ctx.strokeStyle = '#1f3f45'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(32.5, 44, 3, 0.2, Math.PI - 0.2); ctx.stroke();
+  // swirl
+  ctx.strokeStyle = '#effffb'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(34, 10, 7, Math.PI * 0.9, Math.PI * 2.3); ctx.stroke();
+  ctx.beginPath(); ctx.arc(36, 9, 3, Math.PI, Math.PI * 2.2); ctx.stroke();
+  return canvas;
+}
+
+// Seelie: a small glowing spirit with a wispy tail (faces right).
+function seelieTexture() {
+  const { canvas, ctx } = makeCanvas(64, 48);
+  const wisp = (pts, fill) => { ctx.beginPath(); ctx.moveTo(...pts[0]); ctx.quadraticCurveTo(...pts[1], ...pts[2]); ctx.quadraticCurveTo(...pts[3], ...pts[0]); ctx.fillStyle = fill; ctx.fill(); ctx.stroke(); };
+  ctx.strokeStyle = '#2b8fb4'; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+  wisp([[4, 30], [18, 20], [32, 16], [26, 30]], '#9eeeff');
+  wisp([[10, 40], [22, 30], [32, 26], [24, 38]], '#bff6ff');
+  ctx.beginPath(); ctx.arc(38, 22, 10, 0, Math.PI * 2); ctx.fillStyle = '#e9feff'; ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(35, 18, 3.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#2b8fb4'; ctx.beginPath(); ctx.arc(43, 22, 2, 0, Math.PI * 2); ctx.fill();
+  return canvas;
+}
+
 export default {
   key: 'genshin',
   name: 'GENSHIN IMPACT',
@@ -186,6 +224,10 @@ export default {
   pixel: false,
   dustTint: 0xeafff0,
   clearText: 'MONDSTADT CLEARED!',
+  lateGoal: true, // the waypoint unlocks as you reach it
+  caveColor: 0x2c2418,
+  windTint: 0x9ff8e4,
+  mech: { door: '#8f96a8', trim: '#c6ccd9', plate: '#7ff0ff' },
 
   paintSky(ctx, W, H) {
     vGradient(ctx, 0, 0, W, H, [[0, '#3f93e6'], [0.45, '#86c8f4'], [0.75, '#cdeefd'], [1, '#f2fbff']]);
@@ -410,6 +452,60 @@ export default {
       celebrate() {
         scene.tweens.add({ targets: beam, fillAlpha: 0.5, scaleX: 3, duration: 500, yoyo: true, repeat: 1 });
         scene.tweens.add({ targets: halo, scale: 12, duration: 700 });
+      },
+    };
+  },
+
+  carrier(scene) {
+    if (!scene.textures.exists('w_gi_seelie')) addTexture(scene, 'w_gi_seelie', seelieTexture());
+    const obj = scene.add.image(0, 0, 'w_gi_seelie').setDepth(14);
+    const halo = scene.add.image(0, 0, 'fx-dot').setScale(2.4).setTint(0x5fd8ee).setAlpha(0.55).setBlendMode(Phaser.BlendModes.ADD).setDepth(13);
+    const trail = scene.add.particles(0, 0, 'fx-dot', {
+      lifespan: 700, scale: { start: 0.35, end: 0 }, alpha: { start: 0.9, end: 0 }, frequency: 45, tint: [0x5fd8ee, 0xffffff], blendMode: 'ADD',
+    }).setDepth(13);
+    trail.startFollow(obj);
+    return { obj, carryY: 38, tick(ms) { halo.setPosition(obj.x + (obj.flipX ? -6 : 6), obj.y); halo.setScale(2.2 + Math.sin(ms / 200) * 0.3); } };
+  },
+
+  // Anemo Slime: hops back and forth; jump on it to pop it.
+  enemy(scene, t) {
+    if (t.kind !== 'slime') return null;
+    if (!scene.textures.exists('w_gi_slime')) addTexture(scene, 'w_gi_slime', slimeTexture());
+    const feet = rowFeet(t.r) + 2;
+    const spr = scene.add.image(colX(t.c), feet, 'w_gi_slime').setOrigin(0.5, 1).setDepth(15);
+    let gone = false, back = 0;
+    const offset = t.c * 137;
+    return {
+      stompable: true,
+      update(ms, dt) {
+        if (gone) { back -= dt; if (back > 0) return; gone = false; spr.setVisible(true).setAlpha(0); scene.tweens.add({ targets: spr, alpha: 1, duration: 400 }); }
+        const p = pingPong(ms + offset, colX(t.c0), colX(t.c1), 55, 300);
+        const hop = Math.abs(Math.sin((ms + offset) / 320));
+        spr.setPosition(p.x, feet - hop * 34);
+        spr.setScale(1 + (1 - hop) * 0.12, 1 - (1 - hop) * 0.12 + hop * 0.05);
+        if (p.dir) spr.setFlipX(p.dir < 0);
+      },
+      hitbox() { return gone ? null : { x: spr.x - 24, y: spr.y - 44, w: 48, h: 42 }; },
+      stomp() {
+        gone = true; back = 6;
+        spr.setVisible(false);
+        const pop = scene.add.particles(spr.x, spr.y - 24, 'fx-dot', {
+          speed: { min: 80, max: 240 }, lifespan: 500, scale: { start: 0.5, end: 0 }, tint: [0x8cefd9, 0xffffff], blendMode: 'ADD', emitting: false,
+        }).setDepth(30);
+        pop.explode(18);
+        scene.time.delayedCall(600, () => pop.destroy());
+      },
+      reset() { gone = false; spr.setVisible(true).setAlpha(1); },
+    };
+  },
+
+  setpiece(scene) {
+    return {
+      trigger(id) {
+        if (id !== 'waypoint' || scene.goalOpen) return;
+        scene.openGoal();
+        sfx.unlock();
+        ui.toast('TELEPORT WAYPOINT UNLOCKED');
       },
     };
   },

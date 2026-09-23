@@ -20,25 +20,56 @@
       <div class="chip sweets" id="hudSweets"></div>
       <div class="chip" id="hudDeaths">💀 0</div>
       <div class="chip" id="hudTimer">⏱ 00:00.0</div>
+      <div class="chip" id="hudPartner" hidden></div>
       <button class="chip icon" id="muteBtn" aria-label="Toggle sound">🔊</button>
     </div>
 
     <div id="toast" aria-live="polite"></div>
+    <div id="countdown" hidden></div>
 
     <section class="overlay" id="titleOverlay">
       <div class="title-card">
         <canvas id="titleRaccoon" width="258" height="168" aria-hidden="true"></canvas>
         <h1>ZEY'S<br>SWEET QUEST</h1>
         <p class="sub">A raccoon. Five worlds. Fifteen franui.</p>
-        <ol class="world-list">
-          <li><span>1</span>Minecraft</li>
-          <li><span>2</span>Genshin Impact</li>
-          <li><span>3</span>League of Legends</li>
-          <li><span>4</span>Valorant</li>
-          <li><span>5</span>Red Dead Redemption 2</li>
-        </ol>
-        <button class="btn" id="startBtn">▶ PRESS START</button>
-        <p class="keys">← → / A D to move · Space / ↑ to jump (hold for higher)</p>
+        <div id="titleMain">
+          <ol class="world-list">
+            <li><span>1</span>Minecraft</li>
+            <li><span>2</span>Genshin Impact</li>
+            <li><span>3</span>League of Legends</li>
+            <li><span>4</span>Valorant</li>
+            <li><span>5</span>Red Dead Redemption 2</li>
+          </ol>
+          <div class="title-btns">
+            <button class="btn" id="startBtn">▶ SOLO</button>
+            <button class="btn alt" id="duoBtn">♥ DUO ONLINE</button>
+          </div>
+          <p class="keys">← → / A D to move · Space / ↑ to jump (hold for higher)</p>
+        </div>
+        <div id="duoPanel" class="duo" hidden>
+          <p class="kicker">DUO · PLAY TOGETHER ONLINE</p>
+          <div id="duoChoose">
+            <div class="duo-row"><span>Play as</span>
+              <button class="pick on" data-char="cat">🐱 Cat</button>
+              <button class="pick" data-char="raccoon">🦝 Raccoon</button>
+            </div>
+            <button class="btn" id="createBtn">CREATE ROOM</button>
+            <div class="duo-row"><span>or join</span>
+              <input id="codeIn" maxlength="4" placeholder="CODE" autocomplete="off" spellcheck="false" aria-label="Room code">
+              <button class="btn small" id="joinBtn">JOIN</button>
+            </div>
+          </div>
+          <div id="duoRoom" hidden>
+            <p class="room-label">ROOM</p>
+            <div class="room-code" id="roomCode">----</div>
+            <button class="btn small" id="copyBtn">COPY INVITE LINK</button>
+            <p id="duoStatus" aria-live="polite"></p>
+            <button class="btn" id="duoStartBtn" hidden>▶ START TOGETHER</button>
+          </div>
+          <p class="duo-note" id="duoNote" aria-live="polite"></p>
+          <p class="keys">Cat: double jump · Raccoon: climb walls, E to throw your partner up<br>Touch a partner's bubble to revive them · stand on each other's heads</p>
+          <button class="link" id="duoBack">◀ back</button>
+        </div>
       </div>
     </section>
 
@@ -68,6 +99,7 @@
         <div class="letter">
           <p>Five worlds cleared. <span id="finCount">All fifteen franui collected.</span> One incredibly loved raccoon-hearted gamer.</p>
           <p>From Minecraft builds to Valorant clutches, Genshin pulls to League comebacks to Red Dead sunsets — here's to another year of leveling up.</p>
+          <p id="finDuo" hidden>And you didn't do it alone: every world cleared side by side, raccoon and cat. 🐾</p>
           <p>Now go eat some real franui. You've earned it. 🦝🍫</p>
         </div>
         <button class="btn" id="replayBtn">↺ PLAY AGAIN</button>
@@ -75,11 +107,21 @@
       <div id="confetti" aria-hidden="true"></div>
     </section>
 
+    <section class="overlay" id="lostOverlay" hidden>
+      <div class="clear-card">
+        <p class="kicker">DUO</p>
+        <h2>PARTNER DISCONNECTED</h2>
+        <p>Waiting for them to come back…</p>
+        <button class="btn" id="soloBtn">CONTINUE SOLO</button>
+      </div>
+    </section>
+
     <div id="touch" hidden>
       <div class="pad-left">
         <button class="tbtn" id="tLeft" aria-label="Move left">◀</button>
         <button class="tbtn" id="tRight" aria-label="Move right">▶</button>
       </div>
+      <button class="tbtn act" id="tAct" aria-label="Throw partner or call them" hidden>✋</button>
       <button class="tbtn jump" id="tJump" aria-label="Jump">▲</button>
     </div>
   </div>

@@ -2,3 +2,5 @@ node_modules
 dist
 .vercel
 shots
+.env
+.env.local
