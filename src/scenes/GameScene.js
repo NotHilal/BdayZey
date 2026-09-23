@@ -300,9 +300,10 @@ export class GameScene extends Phaser.Scene {
 
   squash(sx, sy) {
     const p = this.player;
-    this.tweens.killTweensOf(p);
+    // only stop the previous squash, not other player tweens (e.g. the respawn fade-in)
+    this.squashTween?.stop();
     p.setScale(sx, sy);
-    this.tweens.add({ targets: p, scaleX: 1, scaleY: 1, duration: 220, ease: 'Back.out' });
+    this.squashTween = this.tweens.add({ targets: p, scaleX: 1, scaleY: 1, duration: 220, ease: 'Back.out' });
   }
 
   collect(s) {
