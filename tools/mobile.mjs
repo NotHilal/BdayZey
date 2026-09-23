@@ -1,0 +1,12 @@
+import puppeteer, { KnownDevices } from 'puppeteer-core';
+const browser = await puppeteer.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: 'new', args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+const page = await browser.newPage();
+await page.emulate(KnownDevices['iPhone 13 landscape']);
+page.on('pageerror', (e) => console.log('PAGEERROR', e.message));
+await page.goto('http://localhost:5199/?world=1', { waitUntil: 'networkidle0' });
+await new Promise((r) => setTimeout(r, 4000));
+await page.screenshot({ path: 'shots/mobile-land.png' });
+await page.emulate(KnownDevices['iPhone 13']);
+await new Promise((r) => setTimeout(r, 1500));
+await page.screenshot({ path: 'shots/mobile-port.png' });
+await browser.close();
