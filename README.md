@@ -10,7 +10,8 @@ Minecraft block textures is painted in code at startup (`src/worlds/*.js`, `src/
 
 ```sh
 npm install
-npm run dev        # http://localhost:5173
+npm run dev        # game on http://localhost:5173 + duo relay on :8787
+npm run dev -- --host   # same, reachable from a phone on your Wi-Fi
 ```
 
 Dev-only URL params: `?world=0..4` jumps into a world, `&x=40` spawns at column 40,
@@ -21,18 +22,25 @@ Dev-only URL params: `?world=0..4` jumps into a world, `&x=40` spawns at column 
 Title screen → **Duo online**: one player creates a room and sends the 4-letter code or invite
 link, the other joins. One plays the raccoon, the other the cat.
 
-Across devices this needs a free [Supabase](https://supabase.com) project (Realtime is on by default):
+Players connect through our own small WebSocket relay (`server/relay.mjs`), which `npm run dev`
+starts for you. It reconnects by itself after network drops. Locally, any browsers on this PC (or
+a phone on the same Wi-Fi with `--host`) can play together; over the internet, deploy it (below).
 
-1. Create a project, then copy **Project URL** and the **anon public key** from Project Settings → API.
-2. Copy `.env.example` to `.env.local` and fill in `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
-3. On Vercel, add the same two variables under Project → Settings → Environment Variables, then redeploy.
+## Deploy to a Hetzner server (game + relay)
 
-Without the keys, Duo runs in test mode: it only links tabs of the same browser.
+One small server hosts both the game and the relay, with automatic HTTPS (Caddy).
 
-## Deploy to Vercel
+1. In the Hetzner console, create a server: Ubuntu 24.04, the smallest type (CX22 or similar) is plenty.
+   Add your SSH key when creating it. Note its IPv4 address.
+2. Pick a domain: your own domain with an A record pointing at the IP, or without one use
+   `<ip-with-dashes>.sslip.io` (e.g. `49-12-34-56.sslip.io`).
+3. From this folder (Git Bash): `bash deploy/deploy.sh root@<ip> <domain>`
+   It builds the game, uploads `dist/`, `server/` and `deploy/`, installs Node + Caddy,
+   and starts the relay as a service. Run the same command again to publish updates.
+4. Open `https://<domain>`. Invite links look like `https://<domain>/?room=ABCD`.
 
-Push the repo to GitHub, then "Add New → Project" on vercel.com and import it.
-Vercel detects Vite automatically (build: `npm run build`, output: `dist`).
+The relay is served at `wss://<domain>/relay`, which the game finds by itself. If you host the game
+somewhere else (e.g. Vercel), set `VITE_RELAY_URL=wss://<domain>/relay` there.
 
 ## Layout
 
@@ -44,4 +52,5 @@ Vercel detects Vite automatically (build: `npm run build`, output: `dist`).
 - `src/mechanics.js` – secrets, timed doors, carriers, wind, set-piece triggers, enemies
 - `src/player.js`, `src/duo.js`, `src/net.js` – player controller, duo sync, networking
 - `src/sfx.js`, `src/tracks.js` – synthesized sound effects and per-world music
-- `tools/` – headless-browser test scripts (`flow`, `mechanics`, `duo`, `tour`); dev server on port 5199
+- `server/relay.mjs`, `deploy/` – duo relay server and the Hetzner setup
+- `tools/` – headless-browser test scripts (`flow`, `mechanics`, `duo`, `relay-drop`, `tour`); dev server on port 5199

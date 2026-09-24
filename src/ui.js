@@ -142,7 +142,7 @@ export const ui = {
     show('duoChoose', true);
     show('duoRoom', false);
     show('duoStartBtn', false);
-    this.duoNote(net.online ? '' : 'Test mode: no Supabase keys are set, so Duo only links tabs of this same browser. See README.');
+    this.duoNote(net.online ? '' : 'Test mode (?localnet): Duo only links tabs of this same browser.');
   },
 
   async joinDuo() {

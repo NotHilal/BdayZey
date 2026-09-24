@@ -1,0 +1,8 @@
+{
+  "name": "zsq-relay",
+  "private": true,
+  "type": "module",
+  "description": "WebSocket relay for Zey's Sweet Quest duo mode",
+  "scripts": { "start": "node relay.mjs" },
+  "dependencies": { "ws": "^8.21.3" }
+}

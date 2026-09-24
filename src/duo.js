@@ -11,7 +11,7 @@ import { makeCanvas, addTexture, glow } from './art/util.js';
 // stomps and set-pieces are idempotent so either side may announce them.
 const SEND_MS = 60;
 const DELAY_MS = 100;
-const LOST_MS = 5000;
+const LOST_MS = 8000; // the relay reconnects by itself; only give up on longer gaps
 const other = (c) => (c === 'cat' ? 'raccoon' : 'cat');
 
 export const duo = {

@@ -12,7 +12,8 @@ Goal of the project: **pretty, recognizable visuals that look like each game's w
 
 ## Stack
 - Phaser 3.90 (Arcade physics) and Vite 8. Plain JS ES modules, no TypeScript, no framework.
-- `@supabase/supabase-js` for Duo (loaded lazily, only when Duo connects with keys set).
+- Duo networking: our own WebSocket relay (`server/relay.mjs`, Node + `ws`), hosted on the owner's Hetzner server
+  together with the game (Caddy, see `deploy/` and README). Supabase was dropped: free projects pause when idle.
 - Deployment target: Vercel (auto-detects Vite; build `npm run build`, output `dist`).
 - `npm install` then `npm run dev`.
 
@@ -33,7 +34,9 @@ load time** and registered as Phaser textures. Music and sound are synthesized t
 | `src/player.js` | `Player`: sprite + body + platformer controller (movement constants live here). Duo abilities: `doubleJump` (cat), `wallClimb` (raccoon), `launch()` (thrown). |
 | `src/mechanics.js` | Shared level mechanics: secret alcoves, timed doors + pressure plates, franui carriers, wind currents, set-piece triggers, the enemy loop. |
 | `src/duo.js` | Duo session (`duo`: create/join, heartbeat, disconnect) and `DuoLink` (per-world sync: partner rendering, shared franui/checkpoints/stomps, revive, head-stacking, throw, both-at-goal). |
-| `src/net.js` | Transport wrapper: `createRoom/joinRoom/send/on/leave`. Supabase Realtime broadcast, or BroadcastChannel (same browser only) when no keys. |
+| `src/net.js` | Transport wrapper: `createRoom/joinRoom/send/on/leave`. WebSocket relay with auto-reconnect/rejoin, or BroadcastChannel (same browser only) in dev without `VITE_RELAY_URL`. |
+| `server/relay.mjs` | Relay: rooms of 2, server-made 4-letter codes, forwards JSON messages, pings, flood limit; reconnects may recreate a room after a restart. |
+| `deploy/` | Hetzner setup: `deploy.sh` (build + upload + setup), `setup.sh` (Node, Caddy, systemd), `Caddyfile`, `zsq-relay.service`. |
 | `src/ui.js` | DOM UI and flow (title → lobby → worlds → clear screens → finale). |
 | `src/state.js` | Run stats (deaths, time, franui). |
 | `src/sfx.js` | Synthesized SFX + the music step sequencer (`music.play(key)`), mute toggle. |
@@ -79,8 +82,10 @@ What each world has now:
 ## Duo (online)
 - Title → **DUO ONLINE** → pick Cat or Raccoon → **Create room** (4-letter code + invite link `?room=ABCD`),
   or type a code / open the link to join (the joiner gets the other character). Host presses **Start together**.
-- Networking: `net.js`. With `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` it uses Supabase Realtime broadcast
-  (channel `zsq-CODE`). Without them it uses BroadcastChannel: **only tabs of the same browser**, for testing.
+- Networking: `net.js` → the relay at `VITE_RELAY_URL`, or `wss://<same host>/relay` in production builds. In dev
+  without `VITE_RELAY_URL` it uses BroadcastChannel: **only tabs of the same browser**, for testing.
+  Drops: the socket reconnects (0.5–4 s backoff) and rejoins; the partner-lost pause only shows after 8 s of silence
+  and clears by itself (`tools/relay-drop.mjs` kills/restarts the relay mid-game to prove it).
 - Each client simulates its own character; state ~16×/s; partner rendered 100 ms behind with interpolation.
 - Host-authoritative: franui (guest sends `collect`, host confirms `collected`). Checkpoints, stomps, `next`, `replay`
   are idempotent broadcasts. Enemies/carriers are simulated locally (time-based, so they look alike on both screens);
@@ -121,8 +126,8 @@ Screenshots go to `shots/` (gitignored).
   set-pieces, music; and online Duo). All test scripts pass; production build works.
 - **Not yet done or verified:**
   - A human hasn't played it: difficulty, control feel and the new set-piece timings are untested by hand.
-  - **Duo over Supabase is untested**: needs a Supabase project and keys (see README). Only the same-browser
-    transport has been exercised. Test on two real devices on different networks.
+  - **The relay is not deployed yet**: run `deploy/deploy.sh` against the Hetzner server, then test on two real
+    devices on different networks (e.g. a phone on mobile data plus a PC).
   - Performance on real phones is unverified. Not deployed to Vercel.
   - Per-world duo twists (Minecraft place/mine blocks, Genshin element combos, LoL shield block, Valorant Sage wall
     + plant, RDR2 ride/lasso) and "cat is heavy enough for plates" are not built. Only one duo-only gate exists.

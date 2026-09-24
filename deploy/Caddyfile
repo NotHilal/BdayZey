@@ -1,0 +1,12 @@
+# Caddy serves the game and proxies the duo relay; HTTPS certificates are automatic.
+# DOMAIN is filled in by deploy/setup.sh.
+{$DOMAIN} {
+	encode gzip
+	handle /relay* {
+		reverse_proxy 127.0.0.1:8787
+	}
+	handle {
+		root * /srv/zsq/dist
+		file_server
+	}
+}

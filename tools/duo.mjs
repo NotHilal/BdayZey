@@ -1,10 +1,15 @@
 // Duo test: two pages in one browser. One creates a room, the other joins via
-// the invite link (BroadcastChannel transport when no Supabase keys are set).
+// the invite link, through the relay (started here if it isn't running).
 // Checks both see each other, franui/checkpoints are shared, revive works,
 // both must reach the goal, "next world" moves both, and disconnect handling.
 // Needs the dev server on :5199. Usage: node tools/duo.mjs
 import puppeteer from 'puppeteer-core';
 import { CHROME } from './browser.mjs';
+import { spawn } from 'node:child_process';
+
+const relayUp = await fetch('http://localhost:8787/').then(() => true, () => false);
+const relay = relayUp ? null : spawn(process.execPath, ['server/relay.mjs'], { stdio: 'ignore' });
+if (relay) await new Promise((r) => setTimeout(r, 600));
 
 const browser = await puppeteer.launch({
   executablePath: CHROME, headless: 'new', protocolTimeout: 30000,
@@ -20,6 +25,7 @@ const open = async (name) => {
   p.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('404')) errs.push(`${name}: ${m.text()}`); });
   return p;
 };
+const BASE = process.env.BASE || 'http://localhost:5199';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const check = (name, ok, info = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? '  ' + info : ''}`); if (!ok) fails++; };
@@ -29,7 +35,7 @@ const put = (page, x, feetY) => page.evaluate((x, y) => { const g = window.__gam
 
 // --- lobby
 const A = await open('host'), B = await open('guest');
-await A.goto('http://localhost:5199/?timer&canvas&fps=20', { waitUntil: 'networkidle0' });
+await A.goto(`${BASE}/?timer&canvas&fps=20`, { waitUntil: 'networkidle0' });
 await sleep(1500);
 await click(A, '#duoBtn');
 await click(A, '#createBtn');
@@ -37,7 +43,7 @@ await until(A, () => /^[A-Z]{4}$/.test(document.getElementById('roomCode').textC
 const code = await A.$eval('#roomCode', (e) => e.textContent);
 console.log('room', code);
 await A.screenshot({ path: 'shots/duo-lobby.png' });
-await B.goto(`http://localhost:5199/?timer&canvas&fps=20&room=${code}`, { waitUntil: 'networkidle0' });
+await B.goto(`${BASE}/?timer&canvas&fps=20&room=${code}`, { waitUntil: 'networkidle0' });
 check('host sees partner join', await until(A, () => !document.getElementById('duoStartBtn').hidden));
 check('guest is told which character', await until(B, () => /raccoon/.test(document.getElementById('duoStatus').textContent)));
 await click(A, '#duoStartBtn');
@@ -109,4 +115,5 @@ check('continue solo resumes the game', await until(A, () => document.getElement
 console.log('errors:', errs.length ? errs : 'none');
 console.log(fails ? `${fails} FAILED` : 'all passed');
 await browser.close();
+relay?.kill();
 process.exit(fails || errs.length ? 1 : 0);

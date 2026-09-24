@@ -1,0 +1,18 @@
+# systemd unit for the duo relay (installed by deploy/setup.sh)
+[Unit]
+Description=Zey's Sweet Quest duo relay
+After=network.target
+
+[Service]
+User=zsq
+WorkingDirectory=/srv/zsq/server
+Environment=PORT=8787
+ExecStart=/usr/bin/node relay.mjs
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
