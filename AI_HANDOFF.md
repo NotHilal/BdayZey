@@ -88,13 +88,31 @@ What each world has now:
   and clears by itself (`tools/relay-drop.mjs` kills/restarts the relay mid-game to prove it).
 - Each client simulates its own character; state ~16×/s; partner rendered 100 ms behind with interpolation.
 - Host-authoritative: franui (guest sends `collect`, host confirms `collected`). Checkpoints, stomps, `next`, `replay`
-  are idempotent broadcasts. Enemies/carriers are simulated locally (time-based, so they look alike on both screens);
-  set-pieces run per client for that client's own player.
-- Co-op: cat double-jumps; raccoon climbs walls and throws the partner up (E / ✋); stand on your partner's head;
-  dead player floats in a bubble toward the partner, who pops it to revive (both dead → checkpoint); partner can press
-  plates and reveal secrets; the world clears only when both reach the goal (after 5 s, E / ✋ calls the partner over).
-  Duo-only piece so far: the tall gate with hold plates in Minecraft (col 50).
-- Disconnect: after 5 s without messages the game pauses with "Continue solo".
+  are idempotent broadcasts.
+- **The host runs the world for both** (`mech.ai`): it broadcasts its world clock (`clock`, 2×/s) so every
+  time-based mover (carriers, slimes, Teemo, tripwires) is in the same place on both screens, and the state of
+  stateful enemies (`foes`, 12×/s, via each enemy's `getState()/setState()`: creeper, snakes). Enemy AI aims at
+  `mech.ai.nearest(x)`, the closest living player. The guest has `ai.follow = true` and only mirrors; if the host
+  drops, the guest takes over. Set-piece events go through `ai.emit(kind, data)` → partner's `setpiece.receive()`
+  (the LoL turret's aim/bolt). Triggers fire when either player passes them. Hits are always checked against the
+  local player only (e.g. a creeper blast kills whoever is in range on their own screen).
+- New enemies with state need `getState()/setState()` and must check `scene.mech.ai.follow` before deciding anything.
+- Abilities (duo only): **both double-jump**. Raccoon: climbs real walls (hold into the wall; tap jump while pushing
+  in to hop up; jump away to kick off) and throws the partner up. Cat: smashes cracked blocks. The action key E / ✋
+  does what fits: call partner (at goal) > pull lever > smash (cat) > throw (raccoon). An "E" bubble marks it, and
+  one-time toasts explain each obstacle. Also: stand on your partner's head; revive bubbles; partner presses plates.
+- **Duo levels** (`DUO_LEVELS`, built with `duo = true`) are the solo levels plus inserted stretches holding
+  teamwork obstacles (`teamThrow / teamWall / teamCage / teamHold` in the builder; `insertFlat` shifts everything
+  right, so call them right-to-left with solo column numbers). Solo levels are untouched.
+  - throw: gate + lever on a ledge 7 rows up; only a thrown cat reaches it (raccoon throws).
+  - wall: 7-row duo wall only the raccoon can climb, then a full-height cracked barrier only the cat can smash.
+  - cage: gate whose lever is inside cracked blocks (cat).  hold: gate with hold plates on both sides.
+  Per world: Minecraft throw + hold + wall; Genshin throw + cage + hold; LoL throw + wall + hold;
+  Valorant throw + wall (Spike timer +18 s in duo); RDR2 throw + cage.
+  Gates and cracks aren't climbable (`GameScene.climbable` only accepts grid walls), gates/cracks starting at row 0
+  extend 400px above the screen, levers open gates for good, cracks/levers are shared (`lever`, `crack` messages).
+  Measured limits (`tools/teamwork.mjs`): double jump ≈ 380px (feet reach y≈149 from 528), throw ≈ 600px+.
+- Disconnect: after 8 s without messages the game pauses with "Continue solo".
 - Messages: `hello welcome start ping bye state collect collected checkpoint stomp revive throw atGoal warp next replay`.
 
 ## Gotchas (learned the hard way)
@@ -117,7 +135,10 @@ Dev server on **port 5199**: `npx vite --port 5199`. Browser path auto-detected 
 override with `CHROME=...`).
 - `node tools/flow.mjs`: full solo playthrough (all 15 franui, every world, finale). **Run after any change.**
 - `node tools/mechanics.mjs`: plates/doors, wind, secrets, stomp, creeper, turret, spike, posse.
-- `node tools/duo.mjs`: two pages; lobby, presence, shared franui/checkpoint, revive, both-at-goal, next world, throw, disconnect.
+- `node tools/duo.mjs`: two pages; lobby, presence, shared franui/checkpoint, lever + crack teamwork, shared creeper, revive,
+  both-at-goal, next world, throw, shared turret, disconnect. (The last check, "continue solo", failed once and then
+  passed 3 runs in a row; if it flakes again, look at a player being a ghost when the partner leaves.)
+- `node tools/teamwork.mjs`: one player on a duo layout (`?duolevel&char=cat`); checks jumps/climbs vs the obstacles.
 - `node tools/tour.mjs [prefix]`: screenshots of every new feature. `shot.mjs`, `mobile.mjs`, `death.mjs` as before.
 Screenshots go to `shots/` (gitignored).
 
@@ -130,10 +151,9 @@ Screenshots go to `shots/` (gitignored).
     devices on different networks (e.g. a phone on mobile data plus a PC).
   - Performance on real phones is unverified. Not deployed to Vercel.
   - Per-world duo twists (Minecraft place/mine blocks, Genshin element combos, LoL shield block, Valorant Sage wall
-    + plant, RDR2 ride/lasso) and "cat is heavy enough for plates" are not built. Only one duo-only gate exists.
-  - Enemies are simulated per client rather than host-authoritative; a stomp is shared, positions may drift slightly.
+    + plant, RDR2 ride/lasso) are not built. The teamwork obstacles haven't been played by two humans yet.
 
 ## Ideas for next steps
 - Play-test and tune `levels.js` (Spike timer `SPIKE_TIME` in valorant.js, posse `SPEED` in rdr2.js).
-- More duo-only co-op pieces per world, then the per-world twists above.
+- Play the duo levels together and tune; then the per-world twists above.
 - Pigeons in Ascent, a horse at the RDR2 camp. Personalize the finale letter in `index.html`.

@@ -443,8 +443,12 @@ export default {
   },
 
   // The last enemy turret targets you in its range; walk past it to take it down.
-  setpiece(scene) {
-    const tx = colX(98), feet = rowFeet(7) + 4;
+  // In duo the host aims (at the closest player) and fires; the guest gets the
+  // same shots through receive(). Each screen checks hits on its own player.
+  setpiece(scene, level) {
+    // the turret stands one column before its trigger (duo levels shift columns)
+    const trig = level.things.find((t) => t.type === 'trigger' && t.id === 'turret');
+    const tx = colX(trig.c - 1), feet = rowFeet(7) + 4;
     if (!scene.textures.exists('w_lol_eturret')) addTexture(scene, 'w_lol_eturret', enemyTurretTexture());
     const tur = scene.add.image(tx, feet, 'w_lol_eturret').setOrigin(0.5, 1).setDepth(-1.5);
     const orb = { x: tx, y: feet - 268 + 78 };
@@ -452,6 +456,14 @@ export default {
     const aim = scene.add.graphics().setDepth(29);
     let bolts = [], cd = 1, aiming = 0, down = false;
     const clear = () => { bolts.forEach((b) => b.img.destroy()); bolts = []; aim.clear(); aiming = 0; };
+    const fire = (vx, vy) => {
+      const img = scene.add.image(orb.x, orb.y, 'fx-dot').setScale(0.9).setTint(0xff6a5e).setBlendMode(Phaser.BlendModes.ADD).setDepth(28);
+      bolts.push({ img, vx, vy, life: 0 });
+      orbGlow.setScale(3);
+      aiming = 0;
+      sfx.shot();
+    };
+    const inRange = (q) => q && q.x > tx - 900 && q.x < tx + 20;
     return {
       update(ms, dt, p) {
         aim.clear();
@@ -460,23 +472,32 @@ export default {
           if (p && Math.hypot(b.img.x - p.x, b.img.y - p.body.center.y) < 30) { clear(); return 'kill'; }
         }
         bolts = bolts.filter((b) => { if (b.life > 2.4) { b.img.destroy(); return false; } return true; });
-        if (down || !p) return;
-        const inRange = p.x > tx - 900 && p.x < tx + 20;
-        if (!inRange) { aiming = 0; cd = Math.max(cd, 0.6); return; }
-        const py = p.body.center.y;
+        if (down) return;
+        const ai = scene.mech.ai;
+        const q = ai.nearest(tx);
         if (aiming > 0) {
           aiming -= dt;
-          aim.lineStyle(3, 0xff4f5e, Math.floor(ms / 60) % 2 ? 0.9 : 0.4).lineBetween(orb.x, orb.y, p.x, py);
-          orbGlow.setScale(3 + (0.55 - aiming) * 4);
-          if (aiming <= 0) {
-            const a = Math.atan2(py - orb.y, p.x - orb.x), sp = 560;
-            const img = scene.add.image(orb.x, orb.y, 'fx-dot').setScale(0.9).setTint(0xff6a5e).setBlendMode(Phaser.BlendModes.ADD).setDepth(28);
-            bolts.push({ img, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0 });
-            orbGlow.setScale(3);
-            sfx.shot();
+          if (inRange(q)) {
+            aim.lineStyle(3, 0xff4f5e, Math.floor(ms / 60) % 2 ? 0.9 : 0.4).lineBetween(orb.x, orb.y, q.x, q.cy);
+            orbGlow.setScale(3 + (0.55 - aiming) * 4);
+          }
+          if (aiming <= 0 && !ai.follow && inRange(q)) {
+            const a = Math.atan2(q.cy - orb.y, q.x - orb.x), sp = 560;
+            fire(Math.cos(a) * sp, Math.sin(a) * sp);
+            ai.emit('bolt', { vx: Math.round(Math.cos(a) * sp), vy: Math.round(Math.sin(a) * sp) });
             cd = 1.3;
           }
-        } else if ((cd -= dt) <= 0) aiming = 0.55;
+          return;
+        }
+        if (ai.follow) return; // the guest waits for the host's aim/bolt events
+        if (!inRange(q)) { cd = Math.max(cd, 0.6); return; }
+        if ((cd -= dt) <= 0) { aiming = 0.55; ai.emit('aim', {}); }
+      },
+      // duo guest: shots decided by the host
+      receive(kind, d) {
+        if (down) return;
+        if (kind === 'aim') aiming = 0.55;
+        else if (kind === 'bolt') fire(d.vx, d.vy);
       },
       trigger(id) {
         if (id !== 'turret' || down) return;

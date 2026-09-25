@@ -129,6 +129,18 @@ export class DuoLink {
     this.arrowIcon = scene.add.image(0, 0, pc.key, 0).setScale(0.4).setScrollFactor(0).setDepth(151).setVisible(false);
 
     this.snaps = [];
+    this.clockT = 0; this.foesT = 0;
+    this.key = ui.coarse ? '✋' : 'E';
+    this.hints = new Set();
+    this.prompt = scene.add.container(0, 0).setDepth(40).setVisible(false);
+    this.prompt.add([
+      scene.add.circle(0, 0, 17, 0x000000, 0.6).setStrokeStyle(2, 0xffffff, 0.9),
+      scene.add.text(0, 1, this.key, { fontFamily: '"Press Start 2P"', fontSize: '14px', color: '#ffffff' }).setOrigin(0.5),
+    ]);
+    // the host runs enemies and set-pieces for both players; the guest mirrors them
+    const ai = scene.mech.ai;
+    ai.follow = !duo.host;
+    ai.emit = (k, d) => this.send('fx', { ...d, k });
     this.sendT = 0;
     this.ghost = null;
     this.atGoal = false; this.partnerAtGoal = false; this.waitT = 0; this.won = false;
@@ -152,10 +164,22 @@ export class DuoLink {
       on('throw', (d) => this.thrown(d)),
       on('atGoal', () => { this.partnerAtGoal = true; this.checkBothAtGoal(); }),
       on('warp', () => this.warped()),
+      on('lever', (d) => scene.mech.pull(d.i)),
+      on('crack', (d) => scene.mech.smash(d.i)),
+      // host → guest: world clock (keeps time-based movers in step) and enemy states
+      on('clock', (d) => { if (!duo.host && Math.abs(scene.mech.t - (d.t + 40)) > 120) scene.mech.t = d.t + 40; }),
+      on('foes', (d) => { if (!duo.host) d.s.forEach((st, i) => { if (st) scene.mech.enemies[i]?.setState?.(st); }); }),
+      on('fx', (d) => { this.fxCount = (this.fxCount || 0) + 1; scene.mech.set.receive?.(d.k, d); }),
     ];
   }
 
   send(type, payload = {}) { net.send(type, { ...payload, w: this.w }); }
+
+  hint(id, msg) {
+    if (this.hints.has(id)) return;
+    this.hints.add(id);
+    ui.toast(msg);
+  }
 
   // ------------------------------------------------------------ franui
   touchSweet(s) {
@@ -311,15 +335,46 @@ export class DuoLink {
       if ((r && r.g && this.ghost.t > 0.8) || this.ghost.t > 20 || duo.lost) this.ghostRespawn();
     }
 
-    // action key: the raccoon throws the partner up; at the goal, call them over
+    // action key (E / ✋) does what fits where you stand: call the partner from the
+    // goal, pull a lever, smash a crack (cat), or throw the partner up (raccoon)
     const act = inp.action && !this.actionPrev;
     this.actionPrev = inp.action;
+    const mech = sc.mech;
+    const alive = !sc.dead && !sc.done && b.enable;
+    const pr = alive ? { x: b.x, y: b.y, w: b.width, h: b.height } : null;
+    const leverI = pr ? mech.nearLever(pr) : -1;
+    const crackI = pr ? mech.nearCrack(pr, sc.me.facing) : -1;
+    const canSmash = crackI >= 0 && duo.me === 'cat';
+    const canThrow = alive && duo.me === 'raccoon' && partnerAlive && Math.abs(p.x - r.x) < 90 && Math.abs(p.y - r.y) < 70;
     if (act && this.atGoal && !this.won) { this.send('warp'); ui.toast('CALLING YOUR PARTNER…'); }
-    else if (act && duo.me === 'raccoon' && partnerAlive && !sc.dead && !sc.done
-      && Math.abs(p.x - r.x) < 90 && Math.abs(p.y - r.y) < 70) {
+    else if (act && leverI >= 0) { if (mech.pull(leverI)) this.send('lever', { i: leverI }); }
+    else if (act && canSmash) {
+      if (mech.smash(crackI)) this.send('crack', { i: crackI });
+      sc.me.squash(1.25, 0.8);
+    } else if (act && canThrow) {
       this.send('throw', { vx: sc.me.facing * 160, vy: -1350 });
       sc.me.squash(1.2, 0.85);
       sfx.stomp();
+    }
+
+    // "E" bubble over whatever you can use right now
+    let at = null;
+    if (leverI >= 0) { const l = mech.levers[leverI]; at = [l.x, l.feet - 78]; }
+    else if (canSmash) { const k = mech.cracks[crackI].rect; at = [k.x + k.w / 2, Math.max(60, Math.min(k.y + k.h - 40, b.y - 40))]; }
+    else if (canThrow) at = [r.x, r.y - 70];
+    this.prompt.setVisible(!!at);
+    if (at) this.prompt.setPosition(at[0], at[1] + Math.sin(now / 150) * 3);
+
+    // one-time hints so both players learn what each obstacle wants
+    if (pr) {
+      if (crackI >= 0) this.hint(duo.me === 'cat' ? 'crackCat' : 'crackRaccoon',
+        duo.me === 'cat' ? `CAT: ${this.key} TO SMASH CRACKED BLOCKS` : 'ONLY THE CAT CAN SMASH CRACKED BLOCKS');
+      const high = mech.levers.find((l) => !l.on && Math.abs(p.x - l.x) < 140 && b.bottom - l.feet > 200);
+      if (high) this.hint('throw', duo.me === 'raccoon' ? `TOO HIGH! STAND NEXT TO THE CAT AND PRESS ${this.key} TO THROW IT` : 'TOO HIGH! LET THE RACCOON THROW YOU UP THERE');
+      const plate = mech.plates.find((pl) => pl.hold && Math.abs(p.x - pl.x) < 200);
+      if (plate) this.hint('hold', 'ONE OF YOU HOLDS THE PLATE, THE OTHER GOES THROUGH');
+      if (canThrow) this.hint('throwReady', `RACCOON: ${this.key} THROWS THE CAT`);
+      if (sc.me.climbing) this.hint('climb', 'KEEP PUSHING INTO THE WALL TO CLIMB · TAP JUMP TO HOP UP');
     }
     if (this.atGoal && !this.won) {
       this.waitT += dt;
@@ -327,6 +382,18 @@ export class DuoLink {
     }
 
     this.drawArrow(r, partnerAlive);
+
+    // host: share the clock and the enemy states. If the host is gone, the guest
+    // takes over running the enemies itself.
+    sc.mech.ai.follow = !duo.host && !duo.lost;
+    if (duo.host) {
+      if ((this.clockT -= delta) <= 0) { this.clockT = 500; this.send('clock', { t: Math.round(sc.mech.t) }); }
+      if ((this.foesT -= delta) <= 0) {
+        this.foesT = 83;
+        const s = sc.mech.enemies.map((e) => e.getState?.() ?? null);
+        if (s.some(Boolean)) this.send('foes', { s });
+      }
+    }
   }
 
   // interpolate between the two snapshots around time t
@@ -364,6 +431,7 @@ export class DuoLink {
   destroy() {
     this.offs.forEach((off) => off());
     this.offs = [];
+    if (this.scene.mech) Object.assign(this.scene.mech.ai, { follow: false, emit: () => {} });
     if (this.scene.mech) this.scene.mech.remoteRect = null;
   }
 }

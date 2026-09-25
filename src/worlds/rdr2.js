@@ -426,28 +426,34 @@ export default {
   },
 
   // Rattlesnake: slithers, rattles when you get close, then strikes.
+  // In duo the host runs it (it goes for the closest player); the guest mirrors getState().
   enemy(scene, t) {
     if (t.kind !== 'snake') return null;
     if (!scene.textures.exists('w_rd_snake0')) { addTexture(scene, 'w_rd_snake0', snakeTexture(false)); addTexture(scene, 'w_rd_snake1', snakeTexture(true)); }
     const feet = rowFeet(t.r) + 3, x0 = colX(t.c0) - 16, x1 = colX(t.c1) + 16;
     const spr = scene.add.image(colX(t.c), feet, 'w_rd_snake0').setOrigin(0.32, 1).setDepth(15).setScale(1.25);
     let state, x, dir, timer, gone;
+    const STATES = ['slither', 'rattle', 'strike', 'cool'];
     const reset = () => { state = 'slither'; x = colX(t.c); dir = 1; timer = 0; gone = 0; spr.setVisible(true).setTexture('w_rd_snake0'); };
     reset();
     return {
       stompable: true,
-      update(ms, dt, p) {
+      update(ms, dt) {
         if (gone > 0) { gone -= dt; if (gone <= 0) { spr.setVisible(true).setAlpha(0); scene.tweens.add({ targets: spr, alpha: 1, duration: 400 }); } return; }
+        const ai = scene.mech.ai;
         timer -= dt;
-        if (state === 'slither') {
+        if (ai.follow) { /* the host decides; setState() moves it */ }
+        else if (state === 'slither') {
           x += dir * 30 * dt;
           if (x > x1) { x = x1; dir = -1; } else if (x < x0) { x = x0; dir = 1; }
-          if (p && Math.abs(p.x - x) < 150 && Math.abs(p.body.bottom - feet) < 70) {
-            dir = p.x < x ? -1 : 1; state = 'rattle'; timer = 0.55; sfx.rattle();
+          const q = ai.nearest(x);
+          if (q && Math.abs(q.x - x) < 150 && Math.abs(q.bottom - feet) < 70) {
+            dir = q.x < x ? -1 : 1; state = 'rattle'; timer = 0.55; sfx.rattle();
           }
-        } else if (state === 'rattle' && timer <= 0) { state = 'strike'; timer = 0.35; spr.setTexture('w_rd_snake1'); }
-        else if (state === 'strike' && timer <= 0) { state = 'cool'; timer = 0.9; spr.setTexture('w_rd_snake0'); }
+        } else if (state === 'rattle' && timer <= 0) { state = 'strike'; timer = 0.35; }
+        else if (state === 'strike' && timer <= 0) { state = 'cool'; timer = 0.9; }
         else if (state === 'cool' && timer <= 0) state = 'slither';
+        spr.setTexture(state === 'strike' ? 'w_rd_snake1' : 'w_rd_snake0');
         spr.setFlipX(dir < 0);
         spr.setOrigin(dir < 0 ? 0.68 : 0.32, 1);
         spr.setPosition(x + (state === 'rattle' ? Math.sin(ms / 20) * 1.5 : 0), feet);
@@ -456,6 +462,15 @@ export default {
         if (gone > 0) return null;
         if (state === 'strike') return dir > 0 ? { x: x - 28, y: feet - 34, w: 96, h: 34 } : { x: x - 68, y: feet - 34, w: 96, h: 34 };
         return { x: x - 28, y: feet - 22, w: 56, h: 22 };
+      },
+      getState() { return [Math.round(x), dir, STATES.indexOf(state), gone > 0 ? 1 : 0]; },
+      setState([sx, sd, st, g]) {
+        x = sx; dir = sd;
+        const next = STATES[st];
+        if (next === 'rattle' && state !== 'rattle' && !gone) sfx.rattle();
+        state = next;
+        if (g && gone <= 0) { gone = 6; spr.setVisible(false); }
+        else if (!g && gone > 0) { gone = 0; spr.setVisible(true).setAlpha(1); }
       },
       stomp() {
         gone = 6; spr.setVisible(false); state = 'slither';

@@ -68,7 +68,8 @@ body {
   position: absolute; left: 50%; top: 13%; transform: translate(-50%, -10px);
   font-family: var(--display); font-size: max(10px, 1.3cqw);
   color: #fff; background: rgba(0, 0, 0, 0.55); padding: 1cqw 1.6cqw; border-radius: 0.6cqw;
-  opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; white-space: nowrap;
+  opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none;
+  max-width: 88%; width: max-content; text-align: center; line-height: 1.5;
   text-shadow: 0 2px 0 #000;
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }

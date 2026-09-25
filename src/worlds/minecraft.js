@@ -403,43 +403,63 @@ export default {
   },
 
   // Creeper: walks its patch; get close and it hisses, swells and explodes.
+  // In duo the host runs it (the closest player sets it off) and the guest mirrors
+  // getState(); each screen checks the blast against its own player.
   enemy(scene, t) {
     if (t.kind !== 'creeper') return null;
     if (!scene.textures.exists('w_mc_creeper')) addTexture(scene, 'w_mc_creeper', creeperTexture(), true);
-    const feet = rowFeet(t.r), x0 = colX(t.c0), x1 = colX(t.c1);
+    const feet = rowFeet(t.r), x0 = colX(t.c0), x1 = colX(t.c1), cy = feet - 50;
     const spr = scene.add.image(colX(t.c), feet, 'w_mc_creeper').setOrigin(0.5, 1).setDepth(15);
-    let state, x, dir, fuse;
-    const reset = () => { state = 'walk'; x = colX(t.c); dir = 1; fuse = 0; spr.setVisible(true).setScale(1).clearTint(); };
+    let state, x, dir, fuse, boomNext = false;
+    const reset = () => { state = 'walk'; x = colX(t.c); dir = 1; fuse = 0; boomNext = false; spr.setVisible(true).setScale(1).clearTint(); };
     reset();
+    const swell = () => {
+      const k = Math.min(1, fuse / 1.25);
+      spr.setScale(1 + k * 0.18, 1 + k * 0.06);
+      if (Math.floor(fuse * 9) % 2) spr.setTintFill(0xffffff); else spr.clearTint();
+    };
+    const boom = (p) => {
+      state = 'gone';
+      spr.setVisible(false);
+      sfx.boom();
+      scene.cameras.main.shake(260, 0.012);
+      const smoke = scene.add.particles(x, cy, 'fx-puff', {
+        speed: { min: 60, max: 260 }, lifespan: 700, scale: { start: 2.4, end: 0.4 }, alpha: { start: 0.9, end: 0 },
+        tint: [0xffffff, 0xd8d8d8, 0x9a9a9a], emitting: false,
+      }).setDepth(31);
+      smoke.explode(30);
+      scene.time.delayedCall(800, () => smoke.destroy());
+      if (p && Math.hypot(p.x - x, p.body.center.y - cy) < 200) return 'kill';
+    };
     return {
       stompable: false,
       update(ms, dt, p) {
+        if (boomNext) { boomNext = false; return boom(p); } // the host said it blew up
         if (state === 'gone') return;
+        const ai = scene.mech.ai;
+        spr.setPosition(x, feet);
+        if (ai.follow) { if (state === 'fuse') { fuse += dt; swell(); } return; }
         if (state === 'walk') {
           x += dir * 40 * dt;
           if (x > x1) { x = x1; dir = -1; } else if (x < x0) { x = x0; dir = 1; }
           spr.setPosition(x, feet);
-          if (p && Math.abs(p.x - x) < 170 && Math.abs(p.body.center.y - (feet - 50)) < 120) { state = 'fuse'; fuse = 0; sfx.fuse(); }
+          const q = ai.nearest(x);
+          if (q && Math.abs(q.x - x) < 170 && Math.abs(q.cy - cy) < 120) { state = 'fuse'; fuse = 0; sfx.fuse(); }
           return;
         }
         fuse += dt;
-        const k = fuse / 1.25;
-        spr.setScale(1 + k * 0.18, 1 + k * 0.06);
-        if (Math.floor(fuse * 9) % 2) spr.setTintFill(0xffffff); else spr.clearTint();
-        if (fuse < 1.25) return;
-        // boom
-        state = 'gone';
-        spr.setVisible(false);
-        sfx.boom();
-        scene.cameras.main.shake(260, 0.012);
-        const cy = feet - 50;
-        const smoke = scene.add.particles(x, cy, 'fx-puff', {
-          speed: { min: 60, max: 260 }, lifespan: 700, scale: { start: 2.4, end: 0.4 }, alpha: { start: 0.9, end: 0 },
-          tint: [0xffffff, 0xd8d8d8, 0x9a9a9a], emitting: false,
-        }).setDepth(31);
-        smoke.explode(30);
-        scene.time.delayedCall(800, () => smoke.destroy());
-        if (p && Math.hypot(p.x - x, p.body.center.y - cy) < 200) return 'kill';
+        swell();
+        if (fuse >= 1.25) return boom(p);
+      },
+      getState() { return [Math.round(x), ['walk', 'fuse', 'gone'].indexOf(state), Math.round(fuse * 100) / 100]; },
+      setState([sx, st, f]) {
+        const next = ['walk', 'fuse', 'gone'][st];
+        x = sx;
+        if (next === 'gone') { if (state !== 'gone') boomNext = true; return; }
+        if (state === 'gone') spr.setVisible(true); // the host brought it back
+        if (next === 'fuse' && state !== 'fuse') { sfx.fuse(); fuse = f; }
+        if (next === 'walk') { fuse = 0; spr.setScale(1).clearTint(); }
+        state = next;
       },
       hitbox() { return state === 'gone' ? null : { x: spr.x - 14, y: feet - 100, w: 28, h: 100 }; },
       reset,

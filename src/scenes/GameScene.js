@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { WORLDS } from '../worlds/index.js';
-import { LEVELS, parseLevel, TILE, TOP, ROWS } from '../levels.js';
+import { LEVELS, DUO_LEVELS, parseLevel, TILE, TOP, ROWS } from '../levels.js';
 import { makeCanvas, chunkedImage, addTexture } from '../art/util.js';
 import { run } from '../state.js';
 import { ui } from '../ui.js';
@@ -28,7 +28,13 @@ export class GameScene extends Phaser.Scene {
     // drop the previous world's generated textures
     this.textures.getTextureKeys().filter((k) => k.startsWith('w_')).forEach((k) => this.textures.remove(k));
     const world = this.world;
-    const level = parseLevel(LEVELS[world.key]);
+    // duo plays longer versions of the levels with teamwork obstacles
+    const duoPlay = this.mode === 'play' && duo.active;
+    // dev-only: ?duolevel loads the duo layout alone (&char=cat to play the cat)
+    const dq = new URLSearchParams(location.search);
+    const devDuo = import.meta.env.DEV && this.mode === 'play' && dq.has('duolevel');
+    const duoLevel = duoPlay || devDuo;
+    const level = parseLevel((duoLevel ? DUO_LEVELS : LEVELS)[world.key]);
     this.level = level;
     world.setup?.(this, level);
 
@@ -68,16 +74,23 @@ export class GameScene extends Phaser.Scene {
     }, { nearest: world.pixel !== false })
       .forEach(({ key, x }) => this.add.image(x, 0, key).setOrigin(0).setDepth(0));
 
-    // --- collision: merge horizontal runs of solid cells into static bodies
+    // --- collision: horizontal runs of solid cells, and runs of the same width in
+    // consecutive rows merged into one tall body, so wall faces have no seams to
+    // snag on (the raccoon climbs them in duo)
     this.solids = this.physics.add.staticGroup();
     this.oneWays = this.physics.add.staticGroup();
-    for (let r = 0; r < ROWS; r++) {
+    const solidAt = (c, r) => level.solid(c, r) || level.solidDuo(c, r);
+    const open = new Map(); // "c0,c1" -> first row of a run still growing downwards
+    const flush = (key, r0, r1) => { const [c0, c1] = key.split(',').map(Number); this.addRect(this.solids, c0 * TILE, TOP + r0 * TILE, (c1 - c0) * TILE, (r1 - r0) * TILE); };
+    for (let r = 0; r <= ROWS; r++) {
+      const runs = new Set();
       let c = 0;
-      while (c < level.cols) {
-        if (level.solid(c, r)) {
+      while (r < ROWS && c < level.cols) {
+        if (solidAt(c, r)) {
           const s = c;
-          while (c < level.cols && level.solid(c, r)) c++;
-          this.addRect(this.solids, s * TILE, TOP + r * TILE, (c - s) * TILE, TILE);
+          while (c < level.cols && solidAt(c, r)) c++;
+          runs.add(s + ',' + c);
+          if (!open.has(s + ',' + c)) open.set(s + ',' + c, r);
         } else if (level.at(c, r) === '-') {
           const s = c;
           while (c < level.cols && level.at(c, r) === '-') c++;
@@ -85,6 +98,7 @@ export class GameScene extends Phaser.Scene {
           b.body.checkCollision.down = false; b.body.checkCollision.left = false; b.body.checkCollision.right = false;
         } else c++;
       }
+      for (const [key, r0] of open) if (!runs.has(key)) { flush(key, r0, r); open.delete(key); }
     }
 
     // --- decorations (props, trees, ...)
@@ -131,9 +145,8 @@ export class GameScene extends Phaser.Scene {
     this.respawn = { x: this.start.x, y: this.start.y };
     // solo is always the raccoon; in duo each client plays its chosen character
     // and gets that character's co-op ability
-    const duoPlay = this.mode === 'play' && duo.active;
-    const char = duoPlay ? duo.me : 'raccoon';
-    const abilities = duoPlay ? (char === 'cat' ? { doubleJump: true } : { wallClimb: true }) : {};
+    const char = duoPlay ? duo.me : devDuo ? (dq.get('char') || 'raccoon') : 'raccoon';
+    const abilities = duoLevel ? (char === 'cat' ? { doubleJump: true } : { doubleJump: true, wallClimb: true }) : {};
     this.me = new Player(this, this.start.x, this.start.y, char, abilities);
     this.player = this.me.sprite;
     this.physics.add.collider(this.player, this.solids);
@@ -141,7 +154,7 @@ export class GameScene extends Phaser.Scene {
     this.shadow = this.add.ellipse(0, 0, 58, 10, 0x000000, 0.22).setDepth(19);
 
     // --- enemies, secrets, doors, carriers, wind, set-piece
-    this.mech = new Mechanics(this, level, world, { duo: duoPlay });
+    this.mech = new Mechanics(this, level, world, { duo: duoLevel });
     this.sweets.forEach((s) => { if (s.carrier) s.ride = this.mech.carriers.get(s.carrier); });
 
     // dust puffs
@@ -188,6 +201,15 @@ export class GameScene extends Phaser.Scene {
     }
     // debug hook for the screenshot/flow scripts in tools/
     if (import.meta.env.DEV) window.__game = this;
+  }
+
+  // is there a climbable wall right next to the player on this side (-1/1)?
+  // Gates and cracked blocks aren't part of the grid, so they can't be climbed.
+  climbable(side) {
+    const b = this.player.body, lv = this.level;
+    const c = Math.floor((side > 0 ? b.right + 4 : b.left - 4) / TILE);
+    const r = Math.floor((b.bottom - 6 - TOP) / TILE); // at the feet: climb until they clear the top
+    return lv.solid(c, r) || lv.solidDuo(c, r);
   }
 
   openGoal() {

@@ -4,7 +4,7 @@ import { CHARACTERS } from './art/sprites.js';
 export const MOVE = 340, ACC_GROUND = 3000, ACC_AIR = 1900, DECEL_GROUND = 3600, DECEL_AIR = 900;
 export const JUMP = 960, GRAV = 2000, FALL_MULT = 1.25, MAX_FALL = 1150;
 const COYOTE = 100, BUFFER = 130;
-const CLIMB_TIME = 1.1, CLIMB_SPEED = 240;
+const CLIMB_TIME = 1.3, CLIMB_SPEED = 240;
 // player hitbox inside the 129x84 character frame (facing right)
 export const BODY = { w: 56, h: 46, ox: 51, oy: 33 };
 
@@ -13,7 +13,7 @@ const approach = (v, t, s) => (v < t ? Math.min(v + s, t) : v > t ? Math.max(v -
 // One playable character: sprite + arcade body + platformer controller.
 // Solo uses a single Player with keyboard/touch input. In duo each client
 // simulates only its own Player; the partner is drawn from network snapshots.
-// abilities (duo only): { doubleJump } for the cat, { wallClimb } for the raccoon.
+// abilities (duo only): both { doubleJump }; the raccoon also { wallClimb }.
 export class Player {
   constructor(scene, x, y, charKey = 'raccoon', abilities = {}) {
     this.scene = scene;
@@ -23,6 +23,19 @@ export class Player {
     s.body.setSize(BODY.w, BODY.h).setOffset(BODY.ox, BODY.oy);
     s.body.setMaxVelocity(MOVE * 1.5, MAX_FALL);
     s.setCollideWorldBounds(true);
+    // Squash & stretch must stay visual: Phaser scales the body with the sprite,
+    // and a wider body on landing can push into a wall and slip through it.
+    const body = s.body, updateBounds = body.updateBounds;
+    body.updateBounds = function () {
+      updateBounds.call(this);
+      this.transform.scaleX = this.transform.scaleX < 0 ? -1 : 1;
+      this.transform.scaleY = this.transform.scaleY < 0 ? -1 : 1;
+      if (this.width !== this.sourceWidth || this.height !== this.sourceHeight) {
+        this.width = this.sourceWidth; this.height = this.sourceHeight;
+        this.halfWidth = Math.floor(this.width / 2); this.halfHeight = Math.floor(this.height / 2);
+        this.updateCenter();
+      }
+    };
     this.facing = 1;
     this.resetState();
     this.play('idle');
@@ -39,6 +52,7 @@ export class Player {
 
   // thrown by the partner (duo): keeps rising even without holding jump
   launch(vx, vy) {
+    this.body.maxVelocity.y = Math.max(MAX_FALL, -vy); // the fall cap would cut the throw short
     this.body.setVelocity(vx, vy);
     this.launched = true;
     this.coyote = 0;
@@ -69,27 +83,33 @@ export class Player {
     this.jumpBuffer = pressed ? BUFFER : this.jumpBuffer - delta;
 
     // raccoon (duo): climb walls while pushing into them, jump off them
-    const wall = (b.blocked.left && inp.left) ? -1 : (b.blocked.right && inp.right) ? 1 : 0;
+    // only real walls can be climbed (not gates or cracked blocks): scene.climbable()
+    let wall = (b.blocked.left && inp.left) ? -1 : (b.blocked.right && inp.right) ? 1 : 0;
+    if (wall && sc.climbable && !sc.climbable(wall)) wall = 0;
     this.climbing = !!this.abilities.wallClimb && !onGround && wall !== 0 && this.climb > 0;
     if (this.climbing) {
-      this.climb -= dt;
+      // stamina only runs down while actually climbing (not while still rising from a jump)
+      if (b.velocity.y >= -CLIMB_SPEED) this.climb -= dt;
       b.velocity.y = Math.min(b.velocity.y, -CLIMB_SPEED);
       if (pressed) {
+        // jump while pushing into the wall: hop up it; otherwise kick off away from it
+        const into = (wall > 0 && inp.right) || (wall < 0 && inp.left);
         b.velocity.y = -JUMP * 0.9;
-        b.velocity.x = -wall * MOVE * 1.2;
+        if (!into) b.velocity.x = -wall * MOVE * 1.2;
         this.climbing = false; this.jumpBuffer = 0;
         sfx.jump();
       }
     }
 
-    if (this.jumpBuffer > 0 && this.coyote > 0) {
+    // (a throw still counts as "on the ground" for a frame: don't let jump replace it)
+    if (this.jumpBuffer > 0 && this.coyote > 0 && !this.launched) {
       b.velocity.y = -JUMP;
       this.jumpBuffer = 0; this.coyote = 0;
       sc.puff(p.x, b.bottom, 6);
       this.squash(0.8, 1.2);
       sfx.jump();
     } else if (pressed && this.abilities.doubleJump && !onGround && this.coyote <= 0 && this.airJumps > 0 && !this.climbing) {
-      // cat (duo): one extra jump in the air
+      // duo: one extra jump in the air
       this.airJumps--;
       b.velocity.y = -JUMP * 0.85;
       this.jumpBuffer = 0;
@@ -97,7 +117,7 @@ export class Player {
       this.squash(0.85, 1.15);
       sfx.jump();
     }
-    if (this.launched && b.velocity.y >= 0) this.launched = false;
+    if (this.launched && b.velocity.y >= 0) { this.launched = false; b.maxVelocity.y = MAX_FALL; }
     if (!inp.jump && !m.inWind && !this.climbing && !this.launched && b.velocity.y < -380) b.velocity.y = -380;
     b.setGravityY(b.velocity.y > 0 && !m.inWind ? GRAV * (FALL_MULT - 1) : 0);
     this.jumpHeldPrev = inp.jump;

@@ -36,11 +36,21 @@ export class Mechanics {
     this.scene = scene; this.level = level; this.world = world;
     this.t = 0;
     this.remoteRect = null; // the duo partner's body, set by DuoLink
+    // What enemies and set-pieces see. players: the living players ({x, cy, bottom});
+    // nearest(x): the closest one, for aiming/aggro. In duo the host decides for both
+    // (follow = false) and the guest only mirrors the host's state (follow = true);
+    // emit(kind, data) sends a set-piece event to the partner (set.receive on their side).
+    this.ai = {
+      follow: false, players: [], emit: () => {},
+      nearest(x) { let best = null; for (const q of this.players) if (!best || Math.abs(q.x - x) < Math.abs(best.x - x)) best = q; return best; },
+    };
     const of = (type) => level.things.filter((t) => t.type === type && (!t.duo || opts.duo));
     this.secrets = of('secret').map((t) => this.secret(t));
     this.doors = {};
     of('door').forEach((t) => { this.doors[t.id] = this.door(t); });
     this.plates = of('plate').map((t) => this.plate(t));
+    this.cracks = of('crack').map((t, i) => this.crack(t, i));
+    this.levers = of('lever').map((t) => this.lever(t));
     this.winds = of('wind').map((t) => this.wind(t));
     this.triggers = of('trigger').map((t) => ({ ...t, x: t.c * TILE, fired: false }));
     this.carriers = new Map(of('carrier').map((t) => [t, this.carrier(t)]));
@@ -96,7 +106,9 @@ export class Mechanics {
       addTexture(s, key, canvas);
     }
     const img = s.add.image(x + TILE / 2, y, key).setOrigin(0.5, 0).setDepth(8);
-    const zone = s.add.zone(x + TILE / 2, y + H / 2, 48, H);
+    // gates that start at the top row reach far above the screen: no jumping over
+    const up = t.r === 0 ? 400 : 0;
+    const zone = s.add.zone(x + TILE / 2, y + H / 2 - up / 2, 48, H + up);
     s.physics.add.existing(zone, true);
     s.physics.add.collider(s.player, zone);
     const barBg = s.add.rectangle(x + TILE / 2, y - 12, 50, 6, 0x000000, 0.5).setDepth(14).setVisible(false);
@@ -110,11 +122,15 @@ export class Mechanics {
         zone.body.enable = false;
         s.tweens.killTweensOf(img);
         s.tweens.add({ targets: img, scaleY: 0.08, duration: 260, ease: 'Quad.out' });
-        barBg.setVisible(true); bar.setVisible(true);
+        // hold plates (short ms) don't need a countdown bar
+        const timed = ms >= 1000 && !d.forever;
+        barBg.setVisible(timed); bar.setVisible(timed);
         sfx.door();
       },
+      // levers open a gate for good
+      openForever() { d.forever = true; d.openFor(1e12, 0); },
       close(instant) {
-        if (!d.open) return;
+        if (!d.open || d.forever) return;
         d.open = false;
         zone.body.enable = true;
         s.tweens.killTweensOf(img);
@@ -123,15 +139,110 @@ export class Mechanics {
         if (!instant) sfx.door();
       },
       update(now, pr) {
-        if (!d.open) return;
+        if (!d.open || d.forever) return;
         const left = d.until - now;
         bar.scaleX = Math.max(0, left / d.ms);
-        if (Math.ceil(left / 1000) !== d.lastSec) { d.lastSec = Math.ceil(left / 1000); if (left > 0) sfx.tick(); }
+        if (d.ms >= 1000 && Math.ceil(left / 1000) !== d.lastSec) { d.lastSec = Math.ceil(left / 1000); if (left > 0) sfx.tick(); }
         // never close on top of the player
         if (left <= 0 && !(pr && overlap(pr, d.rect))) d.close(false);
       },
     };
     return d;
+  }
+
+  // --------------------------------------------- cracked blocks (duo)
+  // Drawn with the world's own block look plus cracks; only the cat breaks them.
+  crack(t, i) {
+    const s = this.scene, w = this.world;
+    const x = t.c * TILE, y = TOP + t.r * TILE, W = t.w * TILE, H = t.h * TILE;
+    const cells = new Set();
+    for (let a = 0; a < t.w; a++) for (let b = 0; b < t.h; b++) cells.add((t.c + a) + ',' + (t.r + b));
+    const base = this.level.view;
+    const view = { ...base, at: (c, r) => (cells.has(c + ',' + r) ? 'B' : base.at(c, r)) };
+    view.solid = (c, r) => { const ch = view.at(c, r); return ch === '#' || ch === 'B'; };
+    const { canvas, ctx } = makeCanvas(W, H);
+    ctx.imageSmoothingEnabled = w.pixel === false;
+    ctx.save();
+    ctx.translate(-x, -y);
+    ctx.beginPath(); ctx.rect(x, y, W, H); ctx.clip();
+    w.paintTerrain(ctx, view, x, x + W);
+    ctx.restore();
+    // cracks: a dark zigzag with a light edge in every cell
+    for (let a = 0; a < t.w; a++) for (let b = 0; b < t.h; b++) {
+      const cx = a * TILE, cy = b * TILE;
+      const pts = [[cx + 18, cy + 4], [cx + 30, cy + 22], [cx + 22, cy + 34], [cx + 40, cy + 50], [cx + 34, cy + 62]];
+      for (const [col, off, lw] of [['rgba(255,255,255,0.35)', 2, 2], ['rgba(20,10,5,0.8)', 0, 3]]) {
+        ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.beginPath();
+        pts.forEach(([px, py], k) => (k ? ctx.lineTo(px + off, py) : ctx.moveTo(px + off, py)));
+        ctx.moveTo(cx + 30 + off, cy + 22); ctx.lineTo(cx + 50 + off, cy + 16);
+        ctx.stroke();
+      }
+    }
+    const key = `w_crack_${i}`;
+    addTexture(s, key, canvas, w.pixel !== false);
+    const img = s.add.image(x, y, key).setOrigin(0).setDepth(4);
+    const up = t.r === 0 ? 400 : 0;
+    const zone = s.add.zone(x + W / 2, y + H / 2 - up / 2, W, H + up);
+    s.physics.add.existing(zone, true);
+    s.physics.add.collider(s.player, zone);
+    return { t, rect: { x, y, w: W, h: H }, img, zone, broken: false };
+  }
+
+  // break crack i (returns false if it was already broken)
+  smash(i) {
+    const k = this.cracks[i];
+    if (!k || k.broken) return false;
+    k.broken = true;
+    k.zone.body.enable = false;
+    const s = this.scene, r = k.rect;
+    const bits = s.add.particles(0, 0, 'fx-px', {
+      x: { min: r.x, max: r.x + r.w }, y: { min: r.y, max: r.y + r.h }, speed: { min: 80, max: 300 }, lifespan: 800,
+      scale: { start: 2.4, end: 0 }, gravityY: 900, tint: [0x7a6a5a, 0xb8a58c, 0x4a3f36], emitting: false,
+    }).setDepth(30);
+    bits.explode(Math.min(80, 14 * k.t.w * k.t.h));
+    s.time.delayedCall(900, () => bits.destroy());
+    s.tweens.add({ targets: k.img, alpha: 0, duration: 200, onComplete: () => k.img.destroy() });
+    s.cameras.main.shake(160, 0.006);
+    sfx.boom();
+    return true;
+  }
+
+  // the crack right in front of a player (pr body rect, facing ±1), or -1
+  nearCrack(pr, facing) {
+    const reach = { x: facing > 0 ? pr.x : pr.x - 34, y: pr.y - 10, w: pr.w + 34, h: pr.h + 20 };
+    return this.cracks.findIndex((k) => !k.broken && overlap(reach, k.rect));
+  }
+
+  // --------------------------------------------------------- levers (duo)
+  lever(t) {
+    const s = this.scene;
+    const x = colX(t.c), feet = rowFeet(t.r);
+    s.add.rectangle(x, feet - 6, 40, 12, 0x3d3a44).setDepth(7);
+    s.add.rectangle(x, feet - 13, 28, 4, 0x5c5866).setDepth(7);
+    const handle = s.add.container(x, feet - 12).setDepth(7).setAngle(-35);
+    handle.add([s.add.rectangle(0, -18, 5, 36, 0x8a6a3f), s.add.circle(0, -38, 7, hexNum(this.world.accent))]);
+    const glowImg = s.add.image(x, feet - 40, 'fx-dot').setScale(1.4).setTint(hexNum(this.world.accent)).setAlpha(0.6).setBlendMode(Phaser.BlendModes.ADD).setDepth(6);
+    s.tweens.add({ targets: glowImg, alpha: 0.2, duration: 700, yoyo: true, repeat: -1 });
+    return { t, x, feet, on: false, handle, glowImg };
+  }
+
+  pull(i) {
+    const l = this.levers[i];
+    if (!l || l.on) return false;
+    l.on = true;
+    this.scene.tweens.add({ targets: l.handle, angle: 35, duration: 200, ease: 'Back.out' });
+    this.scene.tweens.killTweensOf(l.glowImg);
+    l.glowImg.setAlpha(0);
+    this.doors[l.t.door]?.openForever();
+    sfx.unlock();
+    ui.toast('GATE OPEN!');
+    return true;
+  }
+
+  // the lever a player is standing at, or -1
+  nearLever(pr) {
+    const cx = pr.x + pr.w / 2, bottom = pr.y + pr.h;
+    return this.levers.findIndex((l) => !l.on && Math.abs(cx - l.x) < 52 && Math.abs(bottom - l.feet) < 40);
   }
 
   plate(t) {
@@ -141,7 +252,7 @@ export class Mechanics {
     const top = s.add.rectangle(x, feet - 9, 44, 6, hexNum(m.plate || this.world.accent)).setDepth(7);
     const glowImg = s.add.image(x, feet - 10, 'fx-dot').setScale(2.4, 0.8).setTint(hexNum(m.plate || this.world.accent)).setAlpha(0.35).setBlendMode(Phaser.BlendModes.ADD).setDepth(6);
     const p = {
-      down: false,
+      down: false, x, hold: !t.ms,
       update: (now, pr, onGround, rr) => {
         const onIt = (r) => Math.abs(r.x + r.w / 2 - x) < 36 && Math.abs(r.y + r.h - feet) < 12;
         const on = (!!pr && onGround && onIt(pr)) || (!!rr && onIt(rr));
@@ -212,6 +323,10 @@ export class Mechanics {
     const b = p?.body;
     const pr = b && b.enable ? { x: b.x, y: b.y, w: b.width, h: b.height } : null;
     const onGround = !!b && (b.blocked.down || b.touching.down);
+    const rr = this.remoteRect;
+    this.ai.players = [];
+    if (pr) this.ai.players.push({ x: pr.x + pr.w / 2, cy: pr.y + pr.h / 2, bottom: pr.y + pr.h });
+    if (rr) this.ai.players.push({ x: rr.x + rr.w / 2, cy: rr.y + rr.h / 2, bottom: rr.y + rr.h });
 
     for (const d of Object.values(this.doors)) d.update(now, pr);
     for (const pl of this.plates) pl.update(now, pr, onGround, this.remoteRect);
@@ -224,7 +339,11 @@ export class Mechanics {
       else out.die = true;
     }
     if (this.set.update?.(now, dt, pr ? p : null) === 'kill') out.die = true;
-    for (const s of this.secrets) if (!s.found && ((pr && overlap(pr, s.rect)) || (this.remoteRect && overlap(this.remoteRect, s.rect)))) this.reveal(s);
+    for (const s of this.secrets) if (!s.found && ((pr && overlap(pr, s.rect)) || (rr && overlap(rr, s.rect)))) this.reveal(s);
+    // set-pieces start when either player walks past the trigger
+    for (const tr of this.triggers) {
+      if (!tr.fired && ((pr && p.x >= tr.x) || (rr && rr.x + rr.w / 2 >= tr.x))) { tr.fired = true; this.set.trigger?.(tr.id); }
+    }
     if (!pr) return out;
 
     for (const w of this.winds) {
@@ -237,7 +356,6 @@ export class Mechanics {
       }
       w.inside = inside;
     }
-    for (const tr of this.triggers) if (!tr.fired && p.x >= tr.x) { tr.fired = true; this.set.trigger?.(tr.id); }
     return out;
   }
 

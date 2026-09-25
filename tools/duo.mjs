@@ -53,6 +53,8 @@ const chars = await Promise.all([A, B].map((p) => p.evaluate(() => window.__game
 check('host is the cat, guest the raccoon', chars[0] === 'cat' && chars[1] === 'raccoon', chars.join('/'));
 check('co-op gate exists in duo', await A.evaluate(() => !!window.__game.mech.doors.coop));
 await sleep(2500);
+const [ta, tb] = await Promise.all([A, B].map((p) => p.evaluate(() => window.__game.mech.t)));
+check('guest clock follows the host', Math.abs(ta - tb) < 500, `diff ${Math.round(ta - tb)}ms`);
 
 // --- presence: each draws the other near their real position
 await put(A, 600, 528); await put(B, 700, 528);
@@ -69,15 +71,42 @@ await B.evaluate((i) => { const g = window.__game; const s = g.sweets[i]; g.play
 check('guest collect confirmed by host', await until(B, (i) => window.__game.sweets[i].got, 4000, idx));
 check('host counts it too', await until(A, (i) => window.__game.sweets[i].got, 4000, idx));
 
+// positions come from the level: duo levels are longer than solo ones
+const spot = await A.evaluate(() => { const g = window.__game, k = g.checkpoints[0], e = g.mech.enemies[0].hitbox(); return { kx: k.x, ky: k.y, ex: e.x + 14, ey: e.y + e.h }; });
+
 // --- shared checkpoint
-await put(A, 42 * 64 + 32, 464);
+await put(A, spot.kx, spot.ky);
 check('checkpoint shared', await until(B, () => window.__game.checkpoints[0].on, 4000));
 
-// --- revive: guest dies next to host, host pops the bubble
-await put(A, 44 * 64 + 32, 464); await put(B, 43 * 64 + 32, 464);
+// --- teamwork: the cat pulls the lever on the high ledge; the gate opens for both
+const press = async (page) => { await page.keyboard.down('KeyE'); await sleep(250); await page.keyboard.up('KeyE'); };
+const lever = await A.evaluate(() => { const l = window.__game.mech.levers[0]; return { x: l.x, feet: l.feet }; });
+await put(A, lever.x, lever.feet); await sleep(500);
+await press(A);
+check('cat pulls the lever on the high ledge', await until(A, () => window.__game.mech.levers[0].on, 3000));
+check('its gate opens on both screens, for good', await until(B, () => window.__game.mech.doors.mcThrow.open && window.__game.mech.doors.mcThrow.forever, 3000));
+
+// --- only the cat can smash cracked blocks
+const crack = await A.evaluate(() => window.__game.mech.cracks[0].rect);
+const faceRight = (page) => page.evaluate(() => { const g = window.__game; g.me.facing = 1; g.player.setFlipX(false); g.player.body.setOffset(51, 33); });
+await put(B, crack.x - 36, crack.y + crack.h); await faceRight(B); await sleep(500);
+await press(B);
 await sleep(600);
-await B.evaluate(() => window.__game.die());
-check('guest becomes a ghost bubble', await until(B, () => !!window.__game.link.ghost, 3000));
+check('the raccoon cannot smash cracks', !(await A.evaluate(() => window.__game.mech.cracks[0].broken)) && !(await B.evaluate(() => window.__game.mech.cracks[0].broken)));
+await put(A, crack.x - 36, crack.y + crack.h); await faceRight(A); await sleep(500);
+await press(A);
+check('the cat smashes the crack', await until(A, () => window.__game.mech.cracks[0].broken, 3000));
+check('it is gone on both screens', await until(B, () => window.__game.mech.cracks[0].broken, 3000));
+await put(B, spot.kx, spot.ky);
+
+// --- shared creeper: the guest walks up to it; the host's creeper reacts to the guest,
+// blows up on both screens, and only the guest gets hit
+await put(A, spot.kx, spot.ky); await put(B, spot.ex - 130, spot.ey);
+check('creeper goes off for the guest on the host screen', await until(A, () => !window.__game.mech.enemies[0].hitbox(), 8000));
+check('and is gone on the guest screen too', await until(B, () => !window.__game.mech.enemies[0].hitbox(), 3000));
+check('the blast hits the guest (ghost bubble)', await until(B, () => !!window.__game.link.ghost, 3000));
+check('the host far away is fine', !(await A.evaluate(() => window.__game.dead)));
+// --- revive: the host pops the guest's bubble
 check('host sees the bubble', await until(A, () => window.__game.link.theirBubble.visible, 3000));
 await A.screenshot({ path: 'shots/duo-bubble.png' });
 await sleep(1500);
@@ -106,11 +135,21 @@ await sleep(700);
 await B.keyboard.down('KeyE'); await sleep(250); await B.keyboard.up('KeyE');
 check('raccoon throws the cat up', await until(A, () => window.__game.player.y < 340, 2500));
 
+// --- shared turret: the host aims and fires, the guest receives the same shots
+await Promise.all([A, B].map((p) => p.evaluate(() => window.__game.scene.restart({ world: 2, mode: 'play' }))));
+await until(A, () => window.__game.worldIndex === 2 && !!window.__game.link, 8000);
+await until(B, () => window.__game.worldIndex === 2 && !!window.__game.link, 8000);
+await sleep(2000);
+const turret = await A.evaluate(() => window.__game.level.things.find((t) => t.type === 'trigger' && t.id === 'turret').c);
+await put(A, (turret - 5) * 64 + 32, 528); await put(B, (turret - 6) * 64 + 32, 528);
+check('guest gets the host turret shots', await until(B, () => (window.__game.link.fxCount || 0) >= 2, 10000));
+
 // --- disconnect
 await B.close();
 check('host notices the partner left', await until(A, () => !document.getElementById('lostOverlay').hidden, 9000));
 await click(A, '#soloBtn');
-check('continue solo resumes the game', await until(A, () => document.getElementById('lostOverlay').hidden && window.__game.sys.isActive() && !window.__game.link, 4000));
+check('continue solo resumes the game', await until(A, () => document.getElementById('lostOverlay').hidden && window.__game.sys.isActive() && !window.__game.link, 4000),
+  await A.evaluate(() => JSON.stringify({ overlay: document.getElementById('lostOverlay').hidden, active: window.__game.sys.isActive(), paused: window.__game.sys.isPaused(), link: !!window.__game.link, screen: window.__ui.screen, dead: window.__game.dead })));
 
 console.log('errors:', errs.length ? errs : 'none');
 console.log(fails ? `${fails} FAILED` : 'all passed');

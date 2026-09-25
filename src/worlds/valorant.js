@@ -388,7 +388,8 @@ export default {
     return {
       trigger(id) {
         if (id !== 'plant' || left != null) return;
-        left = SPIKE_TIME; beep = 0; dead = false;
+        // duo has a teamwork wall between the plant and the Spike: more time
+        left = scene.link ? SPIKE_TIME + 18 : SPIKE_TIME; beep = 0; dead = false;
         ui.toast('SPIKE PLANTED · DEFUSE IT!');
         sfx.beep(true);
       },

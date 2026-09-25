@@ -225,7 +225,7 @@ export const ui = {
     t.textContent = msg;
     t.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
+    toastTimer = setTimeout(() => t.classList.remove('show'), Math.max(1800, msg.length * 55));
   },
 
   worldCleared(i, world) {

@@ -11,11 +11,15 @@ const BASE = process.env.BASE || 'http://localhost:5199';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let relay = null;
 const startRelay = async () => {
+  if (await fetch('http://localhost:8787/').then(() => true, () => false)) throw new Error('something is already running on :8787; stop it first');
   relay = spawn(process.execPath, ['server/relay.mjs'], { env: { ...process.env, PORT: '8787' }, stdio: 'ignore' });
   for (let i = 0; i < 40; i++) { try { await fetch('http://localhost:8787/'); return; } catch { await sleep(100); } }
   throw new Error('relay did not start');
 };
-const stopRelay = () => new Promise((r) => { relay.once('exit', r); relay.kill(); });
+const stopRelay = () => new Promise((r) => {
+  if (!relay || relay.exitCode !== null || relay.signalCode) return r();
+  relay.once('exit', r); relay.kill();
+});
 
 let fails = 0;
 const check = (name, ok, info = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? '  ' + info : ''}`); if (!ok) fails++; };

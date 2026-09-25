@@ -13,8 +13,9 @@ export const LAST = ROWS - 1;
 
 function builder(cols) {
   const g = Array.from({ length: ROWS }, () => Array(cols).fill('.'));
-  const set = (c, r, ch) => { if (r >= 0 && r < ROWS && c >= 0 && c < cols) g[r][c] = ch; };
+  const set = (c, r, ch) => { if (r >= 0 && r < ROWS && c >= 0 && c < g[0].length) g[r][c] = ch; };
   const things = [];
+  const D = { duo: true };
   const L = {
     // solid ground from surface row s down to the bottom, columns c0..c1 inclusive
     ground(c0, c1, s) { for (let c = c0; c <= c1; c++) for (let r = s; r <= LAST; r++) set(c, r, '#'); return L; },
@@ -36,12 +37,55 @@ function builder(cols) {
     wind(c, w, top) { things.push({ type: 'wind', c, w, top }); return L; },
     // calls world.setpiece().trigger(id) when the player passes column c
     trigger(id, c) { things.push({ type: 'trigger', id, c }); return L; },
+
+    // ---- duo only: teamwork obstacles. Gates, cracked blocks and duo walls can't
+    // be climbed; gates and cracked barriers starting at row 0 reach above the screen.
+    // Insert n columns of flat ground (surface s) at column 'at', shifting everything
+    // right of it. Call the team* helpers right-to-left so earlier columns stay valid.
+    insertFlat(at, n, s) {
+      for (let r = 0; r < ROWS; r++) g[r].splice(at, 0, ...Array(n).fill(r >= s ? '#' : '.'));
+      for (const t of things) {
+        if (t.c >= at) t.c += n;
+        if (t.c0 != null && t.c0 >= at) t.c0 += n;
+        if (t.c1 != null && t.c1 >= at) t.c1 += n;
+        if (t.patrol) t.patrol = t.patrol.map((c) => (c >= at ? c + n : c));
+      }
+      return L;
+    },
+    duoBlock(c, r, w = 1, h = 1) { things.push({ type: 'duoblock', c, r, w, h, ...D }); return L; },
+    crack(c, r, w = 1, h = 1) { things.push({ type: 'crack', c, r, w, h, ...D }); return L; },
+    lever(c, r, door) { things.push({ type: 'lever', c, r, door, ...D }); return L; },
+    gate(id, c, s) { return L.door(id, c, 0, s, D); },
+    // throw: the lever that opens the gate sits on a ledge higher than any jump;
+    // the raccoon has to throw the cat up there (needs ground surface row 8)
+    teamThrow(id, at, s = 8) {
+      L.insertFlat(at, 10, s);
+      L.plat(at + 2, s - 7, 3);
+      return L.lever(at + 3, s - 8, id).gate(id, at + 8, s);
+    },
+    // wall + cracks: a wall only the raccoon can climb, then a cracked barrier only
+    // the cat can smash. The raccoon throws the cat over, the cat breaks through.
+    teamWall(at, s = 8) {
+      L.insertFlat(at, 10, s);
+      return L.duoBlock(at + 2, s - 7, 1, 7).crack(at + 6, 0, 1, s);
+    },
+    // cage: the gate's lever is locked inside cracked blocks; only the cat frees it
+    teamCage(id, at, s) {
+      L.insertFlat(at, 9, s);
+      L.crack(at + 2, s - 2, 1, 2).crack(at + 3, s - 2, 1, 1).crack(at + 4, s - 2, 1, 2);
+      return L.lever(at + 3, s - 1, id).gate(id, at + 7, s);
+    },
+    // hold: plates on both sides of a gate; one holds while the other passes
+    teamHold(id, at, s) {
+      L.insertFlat(at, 9, s);
+      return L.gate(id, at + 4, s).plate(at + 2, s - 1, id, 0, D).plate(at + 6, s - 1, id, 0, D);
+    },
     build() { return { rows: g.map((row) => row.join('')), things }; },
   };
   return L;
 }
 
-function minecraft() {
+function minecraft(duo = false) {
   const L = builder(100);
   // calm opening
   L.ground(0, 14, 8).put(2, 7, 'P');
@@ -56,9 +100,8 @@ function minecraft() {
   // harder middle
   L.ground(41, 52, 7).put(42, 6, 'k');
   L.haz(46, 7, 2);                          // lava pool in the ground
-  // duo only: a tall gate with a hold plate on each side. One holds, the other
-  // passes, then opens it from the far side
-  L.door('coop', 50, 0, 7, { duo: true }).plate(49, 6, 'coop', 0, { duo: true }).plate(52, 6, 'coop', 0, { duo: true });
+  // duo only: a tall gate with a hold plate on each side
+  if (duo) L.gate('coop', 50, 7).plate(48, 6, 'coop', 0, { duo: true }).plate(52, 6, 'coop', 0, { duo: true });
   L.haz(53, LAST, 10);                      // lava lake with stepping blocks
   L.block(55, 6, 2, 1).block(59, 5, 2, 1).put(60, 3, 'c');   // franui 3 above the lake
   L.ground(63, 75, 7).put(64, 6, 'k');
@@ -68,10 +111,14 @@ function minecraft() {
   L.plat(77, 3, 3);
   // set-piece: the portal ignites as you walk up to it
   L.ground(80, 99, 8).put(95, 7, 'G').trigger('ignite', 87);
+  if (duo) {
+    L.teamWall(90, 8);                      // after the portal trigger: climb + smash
+    L.teamThrow('mcThrow', 11, 8);          // right after the start: learn the throw
+  }
   return L.build();
 }
 
-function genshin() {
+function genshin(duo = false) {
   const L = builder(104);
   L.ground(0, 12, 8).put(2, 7, 'P');
   L.ground(13, 16, 7);
@@ -93,10 +140,15 @@ function genshin() {
   L.wind(86, 3, 1);
   L.plat(90, 2, 3).put(91, 1, 'c');         // franui 3 at the top of the wind current
   L.ground(90, 103, 8).put(99, 7, 'G').trigger('waypoint', 94);
+  if (duo) {
+    L.teamHold('giHold', 96, 8);            // before the waypoint
+    L.teamCage('giCage', 38, 7);            // in the meadow with the Seelie
+    L.teamThrow('giThrow', 8, 8);
+  }
   return L.build();
 }
 
-function lol() {
+function lol(duo = false) {
   const L = builder(108);
   L.ground(0, 13, 8).put(3, 7, 'P');
   L.ground(0, 1, 5).secret(0, 7, 2, 1).put(0, 7, 'c');   // franui 1: behind the wall at the start
@@ -118,10 +170,15 @@ function lol() {
   L.ground(85, 88, 6);
   // set-piece: the last turret shoots at you; pass it and the Nexus shield drops
   L.ground(92, 107, 8).put(93, 7, 'k').haz(95, 7).put(103, 7, 'G').trigger('turret', 99);
+  if (duo) {
+    L.teamHold('lolHold', 101, 8);          // between the fallen turret and the Nexus
+    L.teamWall(78, 8);
+    L.teamThrow('lolThrow', 8, 8);
+  }
   return L.build();
 }
 
-function valorant() {
+function valorant(duo = false) {
   const L = builder(110);
   L.ground(0, 14, 8).put(2, 7, 'P');
   L.block(8, 7, 2, 1).block(9, 6, 1, 1);    // crate stack
@@ -145,10 +202,14 @@ function valorant() {
   L.ground(83, 86, 6).put(84, 5, 'k').trigger('plant', 86);
   L.ground(90, 109, 8).haz(94, 7).put(104, 7, 'G');
   L.enemy('trip', 98, 7);
+  if (duo) {
+    L.teamWall(100, 8);                     // after the plant: smash through with the Spike ticking
+    L.teamThrow('valThrow', 11, 8);
+  }
   return L.build();
 }
 
-function rdr2() {
+function rdr2(duo = false) {
   const L = builder(112);
   L.ground(0, 13, 8).put(2, 7, 'P');
   L.ground(17, 24, 7);
@@ -169,6 +230,10 @@ function rdr2() {
   L.ground(85, 90, 8).put(85, 7, 'k').trigger('posse', 87).haz(89, 7);
   L.plat(92, 6, 3);
   L.ground(97, 111, 8).put(107, 7, 'G');
+  if (duo) {
+    L.teamCage('rdCage', 45, 6);            // on the mesa
+    L.teamThrow('rdThrow', 6, 8);
+  }
   return L.build();
 }
 
@@ -178,6 +243,15 @@ export const LEVELS = {
   lol: lol(),
   valorant: valorant(),
   rdr2: rdr2(),
+};
+
+// Duo versions: the same levels with extra ground and teamwork obstacles
+export const DUO_LEVELS = {
+  minecraft: minecraft(true),
+  genshin: genshin(true),
+  lol: lol(true),
+  valorant: valorant(true),
+  rdr2: rdr2(true),
 };
 
 // Parse a layout into grid + entities.
@@ -206,5 +280,14 @@ export function parseLevel(def) {
   });
   const vat = (c, r) => fake.get(c + ',' + r) ?? at(c, r);
   level.view = { ...level, at: vat, solid: (c, r) => { const ch = vat(c, r); return ch === '#' || ch === 'B'; } };
+  // duo walls look and collide like 'B' blocks (only duo levels have them)
+  const walls = new Set();
+  things.filter((t) => t.type === 'duoblock').forEach((t) => {
+    for (let i = 0; i < t.w; i++) for (let j = 0; j < t.h; j++) walls.add((t.c + i) + ',' + (t.r + j));
+  });
+  const dat = (c, r) => (walls.has(c + ',' + r) ? 'B' : vat(c, r));
+  const dsolid = (c, r) => { const ch = dat(c, r); return ch === '#' || ch === 'B'; };
+  level.view.at = dat; level.view.solid = dsolid;
+  level.solidDuo = (c, r) => walls.has(c + ',' + r);
   return level;
 }
