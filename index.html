@@ -21,6 +21,7 @@
       <div class="chip" id="hudDeaths">💀 0</div>
       <div class="chip" id="hudTimer">⏱ 00:00.0</div>
       <div class="chip" id="hudPartner" hidden></div>
+      <div class="chip" id="hudKit" hidden></div>
       <button class="chip icon" id="muteBtn" aria-label="Toggle sound">🔊</button>
     </div>
 
@@ -68,7 +69,7 @@
             <button class="btn" id="duoStartBtn" hidden>▶ START TOGETHER</button>
           </div>
           <p class="duo-note" id="duoNote" aria-live="polite"></p>
-          <p class="keys">Both: double jump · Cat: E smashes cracked blocks · Raccoon: climbs walls, E throws the cat<br>You'll need each other to get through · touch a partner's bubble to revive them</p>
+          <p class="keys">Every world gives you each a new ability on Q · Raccoon: E throws the cat · R if you're stuck<br>You'll need each other to get through · touch a partner's bubble to revive them</p>
           <button class="link" id="duoBack">◀ back</button>
         </div>
       </div>
@@ -113,6 +114,7 @@
         <p class="kicker">DUO</p>
         <h2>CONNECTION LOST</h2>
         <p>The game is paused until your partner is back…</p>
+        <button class="btn" id="lostTitleBtn">◀ BACK TO TITLE</button>
       </div>
     </section>
 
@@ -122,6 +124,7 @@
         <button class="tbtn" id="tRight" aria-label="Move right">▶</button>
       </div>
       <button class="tbtn act" id="tAct" aria-label="Throw partner or call them" hidden>✋</button>
+      <button class="tbtn act2" id="tAbility" aria-label="World ability" hidden>⛏</button>
       <button class="tbtn jump" id="tJump" aria-label="Jump">▲</button>
     </div>
   </div>

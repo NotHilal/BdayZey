@@ -51,7 +51,8 @@ check('guest starts with host', await until(B, () => window.__ui?.screen === 'pl
 await until(A, () => window.__ui?.screen === 'play' && !!window.__game?.link);
 const chars = await Promise.all([A, B].map((p) => p.evaluate(() => window.__game.me.ch.key)));
 check('host is the cat, guest the raccoon', chars[0] === 'cat' && chars[1] === 'raccoon', chars.join('/'));
-check('co-op gate exists in duo', await A.evaluate(() => !!window.__game.mech.doors.coop));
+check('co-op gate exists in duo', await A.evaluate(() => !!window.__game.mech.doors.mcHold));
+check('world kit: cat mines, raccoon builds', await A.evaluate(() => !!window.__game.me.abilities.mine) && await B.evaluate(() => !!window.__game.me.abilities.build));
 await sleep(2500);
 const [ta, tb] = await Promise.all([A, B].map((p) => p.evaluate(() => window.__game.mech.t)));
 check('guest clock follows the host', Math.abs(ta - tb) < 500, `diff ${Math.round(ta - tb)}ms`);
@@ -84,19 +85,29 @@ const lever = await A.evaluate(() => { const l = window.__game.mech.levers[0]; r
 await put(A, lever.x, lever.feet); await sleep(500);
 await press(A);
 check('cat pulls the lever on the high ledge', await until(A, () => window.__game.mech.levers[0].on, 3000));
-check('its gate opens on both screens, for good', await until(B, () => window.__game.mech.doors.mcThrow.open && window.__game.mech.doors.mcThrow.forever, 3000));
+check('its gate opens on both screens, for good', await until(B, () => window.__game.mech.doors.mcLever.open && window.__game.mech.doors.mcLever.forever, 3000));
 
-// --- only the cat can smash cracked blocks
+// --- only the cat can mine ore (Q)
+const pressQ = async (page, ms = 250) => { await page.keyboard.down('KeyQ'); await sleep(ms); await page.keyboard.up('KeyQ'); };
 const crack = await A.evaluate(() => window.__game.mech.cracks[0].rect);
 const faceRight = (page) => page.evaluate(() => { const g = window.__game; g.me.facing = 1; g.player.setFlipX(false); g.player.body.setOffset(51, 33); });
 await put(B, crack.x - 36, crack.y + crack.h); await faceRight(B); await sleep(500);
-await press(B);
+await press(B); await pressQ(B);
 await sleep(600);
-check('the raccoon cannot smash cracks', !(await A.evaluate(() => window.__game.mech.cracks[0].broken)) && !(await B.evaluate(() => window.__game.mech.cracks[0].broken)));
+check('the raccoon cannot mine ore', !(await A.evaluate(() => window.__game.mech.cracks[0].broken)) && !(await B.evaluate(() => window.__game.mech.cracks[0].broken)));
+await B.evaluate(() => window.__game.abil.recall(false));
 await put(A, crack.x - 36, crack.y + crack.h); await faceRight(A); await sleep(500);
-await press(A);
-check('the cat smashes the crack', await until(A, () => window.__game.mech.cracks[0].broken, 3000));
+await pressQ(A);
+check('the cat mines the ore', await until(A, () => window.__game.mech.cracks[0].broken, 3000));
 check('it is gone on both screens', await until(B, () => window.__game.mech.cracks[0].broken, 3000));
+
+// --- the raccoon's blocks: placed with Q, shown (and solid) on the cat's screen too, taken back by holding Q
+await put(B, 20 * 64 + 32, 528); await faceRight(B); await sleep(400);
+await pressQ(B);
+check('raccoon places a block', await until(B, () => window.__game.abil.mine.length === 1, 3000));
+check('the cat sees the block', await until(A, () => window.__game.abil.theirs.length === 1 && window.__game.abil.group.getLength() === 1, 3000));
+await pressQ(B, 900);
+check('holding Q takes it back, on both screens', (await until(B, () => window.__game.abil.mine.length === 0, 3000)) && (await until(A, () => window.__game.abil.theirs.length === 0 && window.__game.abil.group.getLength() === 0, 3000)));
 await put(B, spot.kx, spot.ky);
 
 // --- shared creeper: the guest walks up to it; the host's creeper reacts to the guest,
@@ -117,8 +128,13 @@ await A.evaluate(() => window.__game.player.body.setAllowGravity(true));
 
 // --- goal: one player alone waits, both → clear
 const goal = await A.evaluate(() => { const z = window.__game.goal.zone; return { x: z.x + z.w / 2, y: z.y + z.h }; });
-await A.evaluate(() => window.__game.openGoal());
-await B.evaluate(() => window.__game.openGoal());
+// in duo the way out needs all 3 franui: only 1 found so far
+await put(A, goal.x, goal.y - 4);
+await sleep(1200);
+check('goal shut without all 3 franui', await A.evaluate(() => !window.__game.link.atGoal && !window.__game.goalOpen));
+// the host finds the other two (shared): the portal lights on both screens
+await A.evaluate(() => { const g = window.__game; g.sweets.forEach((s, i) => { if (!s.got) g.link.hostCollect(i); }); });
+check('3rd franui lights the portal for both', (await until(A, () => window.__game.goalOpen, 3000)) && (await until(B, () => window.__game.goalOpen && window.__game.sweets.every((s) => s.got), 3000)));
 await put(A, goal.x, goal.y - 4);
 await sleep(1500);
 check('host waits at the goal alone', await A.evaluate(() => window.__game.link.atGoal && !window.__game.link.won));

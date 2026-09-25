@@ -4,7 +4,9 @@ import { CHARACTERS } from './art/sprites.js';
 export const MOVE = 340, ACC_GROUND = 3000, ACC_AIR = 1900, DECEL_GROUND = 3600, DECEL_AIR = 900;
 export const JUMP = 960, GRAV = 2000, FALL_MULT = 1.25, MAX_FALL = 1150;
 const COYOTE = 100, BUFFER = 130;
-const CLIMB_TIME = 1.3, CLIMB_SPEED = 240;
+export const CLIMB_TIME = 1.3;
+const CLIMB_SPEED = 240;
+export const GLIDE_FALL = 110; // cat's glider (Genshin duo): fall speed while gliding
 // player hitbox inside the 129x84 character frame (facing right)
 export const BODY = { w: 56, h: 46, ox: 51, oy: 33 };
 
@@ -13,7 +15,10 @@ const approach = (v, t, s) => (v < t ? Math.min(v + s, t) : v > t ? Math.max(v -
 // One playable character: sprite + arcade body + platformer controller.
 // Solo uses a single Player with keyboard/touch input. In duo each client
 // simulates only its own Player; the partner is drawn from network snapshots.
-// abilities (duo only): both { doubleJump }; the raccoon also { wallClimb }.
+// abilities (duo only, from the world's kit in duoLevels.js): movement ones live
+// here: wallClimb (hold into a wall), glide (press jump again in the air and hold).
+// The Q abilities are in abilities.js. (doubleJump still works if passed, but no
+// character has it.) speedMul slows walking (the raccoon behind his shield).
 export class Player {
   constructor(scene, x, y, charKey = 'raccoon', abilities = {}) {
     this.scene = scene;
@@ -48,11 +53,17 @@ export class Player {
   resetState() {
     this.jumpBuffer = 0; this.coyote = 0; this.wasGround = false; this.jumpHeldPrev = false; this.lastVy = 0;
     this.airJumps = 0; this.climb = CLIMB_TIME; this.climbing = false; this.launched = false;
+    this.gliding = false; this.glideOn = false; this.lock = 0; this.speedMul = 1;
+    this.glider?.setVisible(false);
+    this.body.maxVelocity.x = MOVE * 1.5;
   }
 
-  // thrown by the partner (duo): keeps rising even without holding jump
-  launch(vx, vy) {
+  // thrown by the partner (duo): keeps rising even without holding jump.
+  // lockMs: no steering for that long (the lasso's yank flies its own arc)
+  launch(vx, vy, lockMs = 0) {
     this.body.maxVelocity.y = Math.max(MAX_FALL, -vy); // the fall cap would cut the throw short
+    this.body.maxVelocity.x = Math.max(MOVE * 1.5, Math.abs(vx));
+    this.lock = lockMs;
     this.body.setVelocity(vx, vy);
     this.launched = true;
     this.coyote = 0;
@@ -65,10 +76,12 @@ export class Player {
     const p = this.sprite, b = p.body;
     const onGround = b.blocked.down || b.touching.down;
 
-    // horizontal
+    // horizontal (not while flying a lasso yank)
     const dir = (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
     const acc = dir !== 0 ? (onGround ? ACC_GROUND : ACC_AIR) : (onGround ? DECEL_GROUND : DECEL_AIR);
-    b.velocity.x = approach(b.velocity.x, dir * MOVE, acc * dt);
+    if (this.lock > 0) this.lock -= delta;
+    else b.velocity.x = approach(b.velocity.x, dir * MOVE * this.speedMul, acc * dt);
+    if (onGround && this.lock <= 0) b.maxVelocity.x = MOVE * 1.5;
     if (dir !== 0 && dir !== this.facing) {
       this.facing = dir;
       p.setFlipX(dir < 0);
@@ -118,8 +131,18 @@ export class Player {
       sfx.jump();
     }
     if (this.launched && b.velocity.y >= 0) { this.launched = false; b.maxVelocity.y = MAX_FALL; }
+    // cat (Genshin duo): glide. Press jump again in the air and hold it: slow fall
+    if (this.abilities.glide) {
+      if (onGround || !inp.jump || this.climbing) this.glideOn = false;
+      else if (pressed && this.coyote <= 0) this.glideOn = true;
+      const was = this.gliding;
+      this.gliding = this.glideOn && b.velocity.y > 0;
+      if (this.gliding) b.maxVelocity.y = GLIDE_FALL;
+      else if (was) b.maxVelocity.y = MAX_FALL;
+      this.gliderImg().setVisible(this.gliding).setPosition(p.x, p.y - 30).setFlipX(this.facing < 0);
+    }
     if (!inp.jump && !m.inWind && !this.climbing && !this.launched && b.velocity.y < -380) b.velocity.y = -380;
-    b.setGravityY(b.velocity.y > 0 && !m.inWind ? GRAV * (FALL_MULT - 1) : 0);
+    b.setGravityY(b.velocity.y > 0 && !m.inWind && !this.gliding ? GRAV * (FALL_MULT - 1) : 0);
     this.jumpHeldPrev = inp.jump;
 
     // landing
@@ -134,6 +157,12 @@ export class Player {
       p.anims.timeScale = 0.6 + Math.abs(b.velocity.x) / MOVE * 0.5;
     } else this.play('idle');
     if (onGround && Math.abs(b.velocity.x) > 200 && Math.random() < 0.08) sc.puff(p.x - this.facing * 20, b.bottom, 1);
+  }
+
+  // the glider drawn over the cat while gliding
+  gliderImg() {
+    if (!this.glider) this.glider = this.scene.add.image(0, 0, gliderTexture(this.scene)).setDepth(21).setVisible(false);
+    return this.glider;
   }
 
   // landed on a stompable enemy
@@ -152,4 +181,17 @@ export class Player {
     p.setScale(sx, sy);
     this.squashTween = this.scene.tweens.add({ targets: p, scaleX: 1, scaleY: 1, duration: 220, ease: 'Back.out' });
   }
+}
+
+// a small wind glider (two leaf wings) for the cat; shared with the partner's view
+export function gliderTexture(scene) {
+  const key = 'glider';
+  if (!scene.textures.exists(key)) {
+    const g = scene.make.graphics({ x: 0, y: 0 }, false);
+    g.fillStyle(0x3a8f6e).fillTriangle(4, 22, 48, 4, 48, 22).fillTriangle(92, 22, 48, 4, 48, 22);
+    g.fillStyle(0x7fe0b8).fillTriangle(10, 20, 48, 8, 48, 20).fillTriangle(86, 20, 48, 8, 48, 20);
+    g.lineStyle(2, 0xe8fff4, 0.9).lineBetween(48, 4, 48, 30);
+    g.generateTexture(key, 96, 32); g.destroy();
+  }
+  return key;
 }

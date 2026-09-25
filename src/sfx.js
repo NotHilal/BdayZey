@@ -74,6 +74,8 @@ export const sfx = {
   },
   unlock() { [392, 523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone({ freq: f, dur: 0.16, vol: 0.05, delay: 0.25 + i * 0.07, type: 'square' })); },
   checkpoint() { tone({ freq: 660, dur: 0.08, vol: 0.05, type: 'triangle' }); tone({ freq: 990, dur: 0.14, vol: 0.05, delay: 0.08, type: 'triangle' }); },
+  mine() { noise({ dur: 0.12, vol: 0.12, hp: 300, lp: 2500 }); tone({ freq: 180, to: 90, dur: 0.1, vol: 0.05, type: 'square' }); },
+  place() { noise({ dur: 0.06, vol: 0.1, hp: 200, lp: 1800 }); tone({ freq: 240, to: 200, dur: 0.06, vol: 0.04, type: 'square' }); },
   nope() { tone({ freq: 220, to: 180, dur: 0.14, vol: 0.05 }); },
   die() { tone({ freq: 520, to: 90, dur: 0.35, vol: 0.07, type: 'sawtooth' }); noise({ dur: 0.18, vol: 0.05 }); },
   win() { [523.25, 659.25, 783.99, 1046.5, 783.99, 1046.5].forEach((f, i) => tone({ freq: f, dur: i > 3 ? 0.3 : 0.12, vol: 0.06, delay: i * 0.11, type: 'square' })); },

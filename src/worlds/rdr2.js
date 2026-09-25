@@ -489,7 +489,7 @@ export default {
     if (!scene.textures.exists('w_rd_rider0')) { addTexture(scene, 'w_rd_rider0', riderTexture(0)); addTexture(scene, 'w_rd_rider1', riderTexture(1)); }
     const SPEED = 255;
     const surface = (c) => { for (let r = 0; r < ROWS; r++) if (level.solid(c, r)) return TOP + r * TILE; return null; };
-    let riders = [], front = 0, active = false, gunT = 0, stopped = false;
+    let riders = [], front = 0, active = false, gunT = 0, stopped = false, wasAlive = true;
     const clear = () => { riders.forEach((r) => r.img.destroy()); riders = []; active = false; };
     return {
       trigger(id) {
@@ -506,7 +506,11 @@ export default {
       },
       update(ms, dt, p) {
         if (!active) return;
-        if (!stopped) front += SPEED * dt;
+        // duo: the posse waits while you're a bubble, and when you're revived (maybe
+        // behind where it got to) it falls back behind you instead of killing you again
+        if (p && !wasAlive) front = Math.min(front, p.x - 500);
+        wasAlive = !!p;
+        if (!stopped && p) front += SPEED * dt;
         for (const r of riders) {
           const x = front - r.off;
           const c = Math.floor(x / TILE);

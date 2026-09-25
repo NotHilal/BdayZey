@@ -52,6 +52,10 @@ export class Mechanics {
     this.cracks = of('crack').map((t, i) => this.crack(t, i));
     this.levers = of('lever').map((t) => this.lever(t));
     this.winds = of('wind').map((t) => this.wind(t));
+    this.bridges = of('bridge').map((t) => this.bridge(t));
+    this.ghosts = of('ghost').map((t) => this.ghost(t));
+    this.revealUntil = -1; // recon (Valorant duo): hidden platforms are solid until mech.t passes this
+    this.timeScale = 1; this.slowUntil = 0; // dead eye (RDR2 duo): the world runs slow until scene time slowUntil
     this.triggers = of('trigger').map((t) => ({ ...t, x: t.c * TILE, fired: false }));
     this.carriers = new Map(of('carrier').map((t) => [t, this.carrier(t)]));
     this.enemies = of('enemy').map((t) => world.enemy?.(scene, t, level)).filter(Boolean);
@@ -151,7 +155,8 @@ export class Mechanics {
   }
 
   // --------------------------------------------- cracked blocks (duo)
-  // Drawn with the world's own block look plus cracks; only the cat breaks them.
+  // Drawn with the world's own block look (or world.crackCell, e.g. Minecraft
+  // ore) plus cracks; only the cat breaks them (smash, or mine in Minecraft).
   crack(t, i) {
     const s = this.scene, w = this.world;
     const x = t.c * TILE, y = TOP + t.r * TILE, W = t.w * TILE, H = t.h * TILE;
@@ -162,11 +167,15 @@ export class Mechanics {
     view.solid = (c, r) => { const ch = view.at(c, r); return ch === '#' || ch === 'B'; };
     const { canvas, ctx } = makeCanvas(W, H);
     ctx.imageSmoothingEnabled = w.pixel === false;
-    ctx.save();
-    ctx.translate(-x, -y);
-    ctx.beginPath(); ctx.rect(x, y, W, H); ctx.clip();
-    w.paintTerrain(ctx, view, x, x + W);
-    ctx.restore();
+    if (w.crackCell) {
+      for (let a = 0; a < t.w; a++) for (let b = 0; b < t.h; b++) w.crackCell(ctx, a * TILE, b * TILE, t.c + a + (t.r + b) * 7);
+    } else {
+      ctx.save();
+      ctx.translate(-x, -y);
+      ctx.beginPath(); ctx.rect(x, y, W, H); ctx.clip();
+      w.paintTerrain(ctx, view, x, x + W);
+      ctx.restore();
+    }
     // cracks: a dark zigzag with a light edge in every cell
     for (let a = 0; a < t.w; a++) for (let b = 0; b < t.h; b++) {
       const cx = a * TILE, cy = b * TILE;
@@ -188,8 +197,8 @@ export class Mechanics {
     return { t, rect: { x, y, w: W, h: H }, img, zone, broken: false };
   }
 
-  // break crack i (returns false if it was already broken)
-  smash(i) {
+  // break crack i (returns false if it was already broken); soft: mining, not a smash
+  smash(i, soft = false) {
     const k = this.cracks[i];
     if (!k || k.broken) return false;
     k.broken = true;
@@ -199,11 +208,11 @@ export class Mechanics {
       x: { min: r.x, max: r.x + r.w }, y: { min: r.y, max: r.y + r.h }, speed: { min: 80, max: 300 }, lifespan: 800,
       scale: { start: 2.4, end: 0 }, gravityY: 900, tint: [0x7a6a5a, 0xb8a58c, 0x4a3f36], emitting: false,
     }).setDepth(30);
-    bits.explode(Math.min(80, 14 * k.t.w * k.t.h));
+    bits.explode(Math.min(soft ? 40 : 80, 14 * k.t.w * k.t.h));
     s.time.delayedCall(900, () => bits.destroy());
     s.tweens.add({ targets: k.img, alpha: 0, duration: 200, onComplete: () => k.img.destroy() });
-    s.cameras.main.shake(160, 0.006);
-    sfx.boom();
+    if (soft) sfx.mine();
+    else { s.cameras.main.shake(160, 0.006); sfx.boom(); }
     return true;
   }
 
@@ -233,9 +242,13 @@ export class Mechanics {
     this.scene.tweens.add({ targets: l.handle, angle: 35, duration: 200, ease: 'Back.out' });
     this.scene.tweens.killTweensOf(l.glowImg);
     l.glowImg.setAlpha(0);
-    this.doors[l.t.door]?.openForever();
+    const id = l.t.door;
+    this.doors[id]?.openForever();
+    this.bridges.filter((br) => br.id === id).forEach((br) => br.show());
+    this.winds.filter((w) => w.id === id).forEach((w) => w.setOn(true));
+    this.enemies.forEach((e) => e.lever?.(id));
     sfx.unlock();
-    ui.toast('GATE OPEN!');
+    ui.toast(this.doors[id] ? 'GATE OPEN!' : this.bridges.some((br) => br.id === id) ? 'A BRIDGE APPEARS!' : this.winds.some((w) => w.id === id) ? 'THE WIND RISES!' : 'SWITCHED OFF!');
     return true;
   }
 
@@ -252,7 +265,7 @@ export class Mechanics {
     const top = s.add.rectangle(x, feet - 9, 44, 6, hexNum(m.plate || this.world.accent)).setDepth(7);
     const glowImg = s.add.image(x, feet - 10, 'fx-dot').setScale(2.4, 0.8).setTint(hexNum(m.plate || this.world.accent)).setAlpha(0.35).setBlendMode(Phaser.BlendModes.ADD).setDepth(6);
     const p = {
-      down: false, x, hold: !t.ms,
+      down: false, x, hold: !t.ms, c: t.c, r: t.r,
       update: (now, pr, onGround, rr) => {
         const onIt = (r) => Math.abs(r.x + r.w / 2 - x) < 36 && Math.abs(r.y + r.h - feet) < 12;
         const on = (!!pr && onGround && onIt(pr)) || (!!rr && onIt(rr));
@@ -270,21 +283,83 @@ export class Mechanics {
   }
 
   // -------------------------------------------------------------- wind
+  // an updraft; with t.id it starts off and a lever with that id turns it on
   wind(t) {
     const s = this.scene;
     const x = t.c * TILE, w = t.w * TILE, top = TOP + t.top * TILE;
     const tint = this.world.windTint ?? 0xffffff;
-    s.add.rectangle(x, top, w, 900, tint, 0.08).setOrigin(0).setDepth(-0.4).setBlendMode(Phaser.BlendModes.ADD);
-    s.add.particles(0, 0, 'fx-streak', {
+    const glow = s.add.rectangle(x, top, w, 900, tint, 0.08).setOrigin(0).setDepth(-0.4).setBlendMode(Phaser.BlendModes.ADD);
+    const streaks = s.add.particles(0, 0, 'fx-streak', {
       x: { min: x + 6, max: x + w - 6 }, y: { min: 560, max: 760 }, lifespan: 1300, speedY: { min: -620, max: -380 },
       rotate: -90, scaleX: { min: 1, max: 2.2 }, scaleY: 0.6, alpha: { start: 0.7, end: 0 }, frequency: 40, tint, blendMode: 'ADD',
     }).setDepth(24);
-    s.add.particles(0, 0, 'fx-dot', {
+    const dots = s.add.particles(0, 0, 'fx-dot', {
       x: { min: x, max: x + w }, y: { min: top + 60, max: 720 }, lifespan: 1600, speedY: { min: -260, max: -120 }, speedX: { min: -20, max: 20 },
       scale: { start: 0.2, end: 0 }, alpha: { start: 0.8, end: 0 }, frequency: 70, tint, blendMode: 'ADD',
     }).setDepth(24);
-    return { rect: { x, y: top, w, h: 900 }, inside: false };
+    const wd = {
+      rect: { x, y: top, w, h: 900 }, inside: false, id: t.id, on: true,
+      setOn(on) {
+        wd.on = on;
+        glow.setVisible(on);
+        if (on) { streaks.start(); dots.start(); } else { streaks.stop(); dots.stop(); }
+      },
+    };
+    if (t.id) wd.setOn(false);
+    return wd;
   }
+
+  // a plank bridge that appears when the lever with its id is pulled (duo)
+  bridge(t) {
+    const s = this.scene, x = t.c * TILE, y = TOP + t.r * TILE, W = t.w * TILE;
+    const img = s.add.tileSprite(x, y, W, 22, bridgeTexture(s, this.world)).setOrigin(0).setDepth(4).setAlpha(0.18);
+    const zone = s.add.zone(x + W / 2, y + 11, W, 22);
+    s.physics.add.existing(zone, true);
+    s.physics.add.collider(s.player, zone);
+    zone.body.enable = false;
+    const br = {
+      id: t.id, shown: false, c: t.c, r: t.r, w: t.w,
+      show() {
+        if (br.shown) return;
+        br.shown = true; zone.body.enable = true;
+        s.tweens.add({ targets: img, alpha: 1, duration: 400 });
+      },
+    };
+    return br;
+  }
+
+  // ------------------------------------------------ hidden platforms (duo)
+  // Only solid while revealed (the cat's recon, Valorant); a faint outline otherwise
+  ghost(t) {
+    const s = this.scene, x = t.c * TILE, y = TOP + t.r * TILE, W = t.w * TILE;
+    const g = s.add.graphics().setDepth(4);
+    const zone = s.add.zone(x + W / 2, y + 12, W, 24);
+    s.physics.add.existing(zone, true);
+    s.physics.add.collider(s.player, zone);
+    zone.body.enable = false;
+    const gh = {
+      rect: { x, y, w: W, h: 24 }, on: null, c: t.c, r: t.r, w: t.w,
+      set(on) {
+        if (gh.on === on) return;
+        gh.on = on; zone.body.enable = on;
+        g.clear();
+        if (on) {
+          g.fillStyle(0x3fe0c5, 0.55).fillRect(x, y, W, 24).lineStyle(3, 0xbffff4, 1).strokeRect(x + 1, y + 1, W - 2, 22);
+        } else {
+          g.lineStyle(2, 0x3fe0c5, 0.28);
+          for (let i = 0; i < W; i += 16) g.lineBetween(x + i, y + 1, x + i + 8, y + 1);
+        }
+      },
+    };
+    gh.set(false);
+    return gh;
+  }
+
+  // recon: hidden platforms show and hold for ms
+  reveal(ms) { this.revealUntil = Math.max(this.revealUntil, this.t + ms); }
+
+  // dead eye: the world (enemies, movers, timers) runs slow for ms of real time
+  slow(ms, scale = 0.3) { this.timeScale = scale; this.slowUntil = this.scene.time.now + ms; }
 
   // ----------------------------------------------------------- carriers
   carrier(t) {
@@ -316,8 +391,11 @@ export class Mechanics {
   // p is the player sprite (null in attract/finale mode). Returns what the
   // scene has to react to: { die, bounce, inWind }.
   update(delta, p) {
+    if (this.timeScale !== 1 && this.scene.time.now >= this.slowUntil) this.timeScale = 1;
+    delta *= this.timeScale;
     this.t += delta;
     const now = this.t, dt = delta / 1000;
+    for (const gh of this.ghosts) gh.set(now < this.revealUntil);
     const out = { die: false, bounce: false, inWind: false };
     for (const c of this.carriers.values()) c.update(now);
     const b = p?.body;
@@ -347,7 +425,7 @@ export class Mechanics {
     if (!pr) return out;
 
     for (const w of this.winds) {
-      const inside = overlap(pr, w.rect);
+      const inside = w.on && overlap(pr, w.rect);
       if (inside) {
         out.inWind = true;
         const nearTop = b.y < w.rect.y + 24;
@@ -366,4 +444,18 @@ export class Mechanics {
     this.triggers.forEach((tr) => { if (tr.x > rx) tr.fired = false; });
     this.set.reset?.();
   }
+}
+
+// planks for lever bridges (world.mech.bridge colours them)
+function bridgeTexture(scene, world) {
+  const key = 'w_bridge';
+  if (!scene.textures.exists(key)) {
+    const { canvas, ctx } = makeCanvas(64, 22);
+    ctx.fillStyle = world.mech?.bridge || '#8a6440'; ctx.fillRect(0, 0, 64, 22);
+    ctx.fillStyle = 'rgba(0,0,0,0.3)'; for (let i = 0; i < 64; i += 16) ctx.fillRect(i, 0, 2, 22);
+    ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(0, 0, 64, 4);
+    ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(0, 18, 64, 4);
+    addTexture(scene, key, canvas);
+  }
+  return key;
 }

@@ -11,7 +11,7 @@ export const ROWS = 11;
 export const TOP = 16; // 16 + 11*64 = 720
 export const LAST = ROWS - 1;
 
-function builder(cols) {
+export function builder(cols) {
   const g = Array.from({ length: ROWS }, () => Array(cols).fill('.'));
   const set = (c, r, ch) => { if (r >= 0 && r < ROWS && c >= 0 && c < g[0].length) g[r][c] = ch; };
   const things = [];
@@ -34,7 +34,7 @@ function builder(cols) {
     // enemy standing in row r, patrolling columns c0..c1
     enemy(kind, c, r, c0 = c, c1 = c) { things.push({ type: 'enemy', kind, c, r, c0, c1 }); return L; },
     // updraft over columns c..c+w-1 that lifts you up to row `top`
-    wind(c, w, top) { things.push({ type: 'wind', c, w, top }); return L; },
+    wind(c, w, top, id) { things.push({ type: 'wind', c, w, top, id }); return L; },
     // calls world.setpiece().trigger(id) when the player passes column c
     trigger(id, c) { things.push({ type: 'trigger', id, c }); return L; },
 
@@ -52,6 +52,11 @@ function builder(cols) {
       }
       return L;
     },
+    // lever-driven pieces (duo): a bridge that appears, a hidden platform (recon)
+    bridge(id, c, r, w) { things.push({ type: 'bridge', id, c, r, w, ...D }); return L; },
+    ghost(c, r, w = 1) { things.push({ type: 'ghost', c, r, w, ...D }); return L; },
+    // lane turret (LoL duo): fires along row r toward dir; a lever with id switches it off
+    turret(c, r, dir, id, len = 20) { things.push({ type: 'enemy', kind: 'lane', c, r, c0: c, c1: c, dir, id, len, ...D }); return L; },
     duoBlock(c, r, w = 1, h = 1) { things.push({ type: 'duoblock', c, r, w, h, ...D }); return L; },
     crack(c, r, w = 1, h = 1) { things.push({ type: 'crack', c, r, w, h, ...D }); return L; },
     lever(c, r, door) { things.push({ type: 'lever', c, r, door, ...D }); return L; },
@@ -75,10 +80,13 @@ function builder(cols) {
       L.crack(at + 2, s - 2, 1, 2).crack(at + 3, s - 2, 1, 1).crack(at + 4, s - 2, 1, 2);
       return L.lever(at + 3, s - 1, id).gate(id, at + 7, s);
     },
-    // hold: plates on both sides of a gate; one holds while the other passes
+    // hold: plates on both sides of a gate; one holds while the other passes. The
+    // plates sit 4 columns from the gate: a hold plate keeps the gate open only 150ms
+    // after you step off, and running from the plate to the gate takes ~0.5s, so
+    // nobody gets through alone (the gate never closes on someone standing in it)
     teamHold(id, at, s) {
-      L.insertFlat(at, 9, s);
-      return L.gate(id, at + 4, s).plate(at + 2, s - 1, id, 0, D).plate(at + 6, s - 1, id, 0, D);
+      L.insertFlat(at, 13, s);
+      return L.gate(id, at + 6, s).plate(at + 2, s - 1, id, 0, D).plate(at + 10, s - 1, id, 0, D);
     },
     build() { return { rows: g.map((row) => row.join('')), things }; },
   };
@@ -100,8 +108,6 @@ function minecraft(duo = false) {
   // harder middle
   L.ground(41, 52, 7).put(42, 6, 'k');
   L.haz(46, 7, 2);                          // lava pool in the ground
-  // duo only: a tall gate with a hold plate on each side
-  if (duo) L.gate('coop', 50, 7).plate(48, 6, 'coop', 0, { duo: true }).plate(52, 6, 'coop', 0, { duo: true });
   L.haz(53, LAST, 10);                      // lava lake with stepping blocks
   L.block(55, 6, 2, 1).block(59, 5, 2, 1).put(60, 3, 'c');   // franui 3 above the lake
   L.ground(63, 75, 7).put(64, 6, 'k');
@@ -113,6 +119,7 @@ function minecraft(duo = false) {
   L.ground(80, 99, 8).put(95, 7, 'G').trigger('ignite', 87);
   if (duo) {
     L.teamWall(90, 8);                      // after the portal trigger: climb + smash
+    L.teamHold('coop', 48, 7);              // after the lava pool: one holds, the other passes
     L.teamThrow('mcThrow', 11, 8);          // right after the start: learn the throw
   }
   return L.build();
@@ -258,6 +265,7 @@ export const DUO_LEVELS = {
 export function parseLevel(def) {
   const { rows, things = [] } = def;
   const cols = rows[0].length;
+  // duo levels (duoLevels.js) may add: kit (abilities per character), openOnFranui
   const at = (c, r) => (r < 0 || r >= ROWS || c < 0 || c >= cols ? (r >= ROWS ? '#' : '.') : rows[r][c]);
   const solid = (c, r) => { const ch = at(c, r); return ch === '#' || ch === 'B'; };
   const ents = { start: null, goal: null, sweets: [], checkpoints: [], hazards: [], plats: [] };
@@ -272,7 +280,7 @@ export function parseLevel(def) {
     else if (ch === '-') ents.plats.push({ x, y, c, r });
   }
   things.filter((t) => t.type === 'carrier').forEach((t) => ents.sweets.push({ x: t.c * TILE + TILE / 2, y: TOP + t.r * TILE, carrier: t }));
-  const level = { rows, things, cols, width: cols * TILE, at, solid, ents };
+  const level = { rows, things, cols, width: cols * TILE, at, solid, ents, kit: def.kit, openOnFranui: !!def.openOnFranui, def };
   // `view` is how the terrain painters see the level: secret cells look solid
   const fake = new Map();
   things.filter((t) => t.type === 'secret').forEach((t) => {

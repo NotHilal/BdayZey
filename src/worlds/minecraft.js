@@ -393,6 +393,24 @@ export default {
 
   post(scene) {},
 
+  // duo: blocks the cat can mine are ore (the cracks are drawn on top)
+  crackCell(ctx, x, y, k) {
+    blit(ctx, ['coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore'][Math.abs(k) % 4], x, y);
+  },
+
+  // duo: the raccoon's blocks are oak planks, easy to tell from the terrain
+  buildTexture(scene) {
+    const key = 'w_mc_build';
+    if (!scene.textures.exists(key)) {
+      const { canvas, ctx } = makeCanvas(TILE, TILE);
+      blit(ctx, 'oak_planks', 0, 0);
+      shade(ctx, 0, TILE - 6, TILE, 6, 0.3);
+      shade(ctx, TILE - 4, 0, 4, TILE, 0.2);
+      addTexture(scene, key, canvas, true);
+    }
+    return key;
+  },
+
   carrier(scene, t) {
     if (!scene.textures.exists('w_mc_pig0')) { addTexture(scene, 'w_mc_pig0', pigTexture(0), true); addTexture(scene, 'w_mc_pig1', pigTexture(1), true); }
     const obj = scene.add.image(0, 0, 'w_mc_pig0').setOrigin(0.5, 1).setDepth(14);
@@ -455,7 +473,13 @@ export default {
       setState([sx, st, f]) {
         const next = ['walk', 'fuse', 'gone'][st];
         x = sx;
-        if (next === 'gone') { if (state !== 'gone') boomNext = true; return; }
+        if (next === 'gone') {
+          // a real blast always follows the fuse; "gone" while it walks is an old
+          // message arriving after a respawn reset: vanish quietly, no phantom boom
+          if (state === 'fuse') boomNext = true;
+          else if (state !== 'gone') { state = 'gone'; spr.setVisible(false); }
+          return;
+        }
         if (state === 'gone') spr.setVisible(true); // the host brought it back
         if (next === 'fuse' && state !== 'fuse') { sfx.fuse(); fuse = f; }
         if (next === 'walk') { fuse = 0; spr.setScale(1).clearTint(); }

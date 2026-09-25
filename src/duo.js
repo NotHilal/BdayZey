@@ -4,6 +4,9 @@ import { ui, IRIS_MS } from './ui.js';
 import { sfx } from './sfx.js';
 import { CHARACTERS } from './art/sprites.js';
 import { makeCanvas, addTexture, glow } from './art/util.js';
+import { TILE, TOP } from './levels.js';
+import { overlap } from './mechanics.js';
+import { gliderTexture } from './player.js';
 
 // Online duo. Each client simulates its own character and sends its state ~16
 // times a second; the partner is drawn from those snapshots, 100ms in the past.
@@ -12,7 +15,10 @@ import { makeCanvas, addTexture, glow } from './art/util.js';
 const SEND_MS = 60;
 const DELAY_MS = 100;
 const LOST_MS = 8000; // the relay reconnects by itself; only give up on longer gaps
-const GHOST_LINGER = 0.8, GHOST_SPEED = 110; // ghost bubble: s at the death spot, then px/s toward the partner
+const GHOST_LINGER = 0.8, GHOST_SPEED = 140; // ghost bubble: s floating at the death spot, then top speed (px/s)
+const REVIVE_INVULN_MS = 1000; // after a revive nothing can kill you for this long
+const GHOST_NEAR = 280; // closer than this to the partner, the bubble starts circling them
+const GHOST_KEEP = 95, GHOST_MIN = 80; // bubble distance from the partner's centre: prefers / at least (pop reach is 70)
 // (no timeout: a bubble waits until it's popped, or both are down)
 const other = (c) => (c === 'cat' ? 'raccoon' : 'cat');
 
@@ -167,7 +173,9 @@ export class DuoLink {
       on('atGoal', () => { this.partnerAtGoal = true; this.checkBothAtGoal(); }),
       on('warp', () => this.warped()),
       on('lever', (d) => scene.mech.pull(d.i)),
-      on('crack', (d) => scene.mech.smash(d.i)),
+      on('crack', (d) => scene.mech.smash(d.i, !!scene.level.kit)),
+      on('block', (d) => scene.abil?.remote(d)),
+      on('ab', (d) => scene.abil?.remoteAb(d)),
       // host → guest: world clock (keeps time-based movers in step) and enemy states
       on('clock', (d) => { if (!duo.host && Math.abs(scene.mech.t - (d.t + 40)) > 120) scene.mech.t = d.t + 40; }),
       on('foes', (d) => { if (!duo.host) d.s.forEach((st, i) => { if (st) scene.mech.enemies[i]?.setState?.(st); }); }),
@@ -207,22 +215,54 @@ export class DuoLink {
     // (if the partner is a bubble too, both are down: update() plays the circle wipe)
     if (!partner || partner.goal) return false;
     // (a fall into a pit starts the bubble at the edge of the screen, not below it)
-    this.ghost = { x, y: Math.min(y, 460), t: 0 };
+    const y0 = Math.min(y, 460);
+    const rnd = () => Math.random() * Math.PI * 2;
+    this.ghost = { x, y: y0, t: 0, home: { x, y: y0 }, vx: 0, vy: -40, ang: rnd(), spin: Math.random() < 0.5 ? 1 : -1, ph: [rnd(), rnd(), rnd(), rnd()] };
     this.myBubble.setPosition(x, this.ghost.y).setVisible(true).setScale(0.3);
     this.scene.tweens.add({ targets: this.myBubble, scale: 1, duration: 300, ease: 'Back.out' });
+    this.scene.follow(this.myBubble); // the screen goes with the bubble (respawnAt switches back)
     ui.toast('WAIT FOR YOUR PARTNER TO POP YOUR BUBBLE');
     return true;
   }
 
   revived() {
     if (!this.ghost) return;
-    // come back next to the partner who popped it (the bubble itself may hang over a pit)
+    // come back on safe ground just behind the partner who popped it (never where
+    // the bubble is: that may hang over a pit), and can't die for a moment
     const r = this.partnerState();
-    const [x, y] = r && !r.g ? [r.x, r.y + 42] : [this.myBubble.x, this.myBubble.y + 40];
+    const spot = r ? this.safeSpot(r) : { x: this.myBubble.x, feet: this.myBubble.y + 40 };
     this.ghost = null;
     this.myBubble.setVisible(false);
     sfx.checkpoint();
-    this.scene.respawnAt(x, y, false);
+    this.scene.respawnAt(spot.x, spot.feet, false, REVIVE_INVULN_MS);
+  }
+
+  // A safe place to stand 1-3 columns behind the partner (they face away from it),
+  // measured from where they last stood on real ground. Solid floor, no hazard,
+  // nothing in the way between them and it. Else in front of them, else their spot.
+  safeSpot(r) {
+    const sc = this.scene, lv = sc.level, m = sc.mech;
+    const ax = r.sx || r.x, af = r.sy || r.y + 42;
+    const c0 = Math.floor(ax / TILE), rs = Math.round((af - TOP) / TILE); // their column, the row they stand on
+    const behind = r.f ? 1 : -1; // flipX means they face left
+    const solid = (c, row) => (sc.abil ? sc.abil.solidAt(c, row) : lv.solid(c, row)) || lv.at(c, row) === '-';
+    const blocked = (rect) => Object.values(m.doors).some((d) => !d.open && overlap(rect, d.rect)) || m.cracks.some((k) => !k.broken && overlap(rect, k.rect));
+    const body = (c, surf) => ({ x: c * TILE + 4, y: TOP + surf * TILE - 50, w: TILE - 8, h: 50 });
+    const standable = (c, surf) => {
+      const row = surf - 1;
+      if (row < 0 || solid(c, row) || lv.at(c, row) === '^' || !solid(c, surf) || lv.at(c, surf) === '^') return false;
+      const rect = body(c, surf);
+      return !blocked(rect) && !sc.hazards.some((h) => overlap(rect, { x: h.x - 12, y: h.y - 12, w: h.w + 24, h: h.h + 24 }));
+    };
+    for (const side of [behind, -behind]) {
+      for (let d = 1; d <= 3; d++) {
+        const c = c0 + side * d;
+        // a wall or a shut gate in the way at body height: nothing further this side
+        if (solid(c, rs - 1) || blocked(body(c, rs))) break;
+        for (const surf of [rs, rs + 1]) if (standable(c, surf)) return { x: c * TILE + TILE / 2, feet: TOP + surf * TILE };
+      }
+    }
+    return { x: ax, feet: af };
   }
 
   // both players are bubbles: the screen closes in a circle on my bubble, I'm
@@ -242,6 +282,84 @@ export class DuoLink {
         sc.time.delayedCall(60, () => { ui.iris(false, ...at(sc.player.x, sc.player.y)); this.wiping = false; });
       });
     });
+  }
+
+  // Free-flying bubble, unpredictable the whole way. It steers toward a target that
+  // keeps moving and overshoots a little, with a soft random wobble on top:
+  // - on the way to the partner it meanders up and down, sometimes drifting back;
+  // - near the partner it circles them loosely, switching direction now and then;
+  // - and every so often it has a "mood" for a moment: a little loop, a hover, or a
+  //   gust that knocks it off course.
+  // It stays just out of reach of a partner standing still (see below).
+  flyBubble(g, r, dt) {
+    const t = g.t, ph = g.ph;
+    const noise = (a, b, k) => Math.sin(t * a + ph[k]) * 0.6 + Math.sin(t * b + ph[(k + 1) % 4]) * 0.4; // smooth, -1..1
+    const free = r && t >= GHOST_LINGER;
+    let tx, ty;
+    if (!free) {
+      // no partner to go to (yet): bob about where it is
+      tx = g.home.x + noise(0.7, 1.9, 0) * 50;
+      ty = g.home.y - 20 + noise(0.9, 2.3, 1) * 35;
+    } else if (Math.hypot(r.x - g.x, r.y - g.y) > GHOST_NEAR) {
+      // on the way: a wandering point ahead, pulled up and down, sometimes behind it
+      const ahead = 200 + noise(0.35, 0.9, 3) * 160;
+      tx = g.x + Math.sign(r.x - g.x) * ahead;
+      ty = r.y - 110 + noise(0.5, 1.3, 2) * 150;
+    } else {
+      // around the partner
+      g.ang += (g.spin * 0.8 + noise(0.5, 1.3, 2) * 1.2) * dt;
+      if (Math.random() < dt * 0.12) g.spin = -g.spin;
+      const rx = 150 + noise(0.4, 1.1, 3) * 45;
+      tx = r.x + Math.cos(g.ang) * rx;
+      ty = r.y - 95 + Math.sin(g.ang) * 70 + noise(0.6, 1.7, 0) * 25;
+    }
+    if (free) {
+      // moods
+      g.moodT = (g.moodT ?? 1 + Math.random()) - dt;
+      if (g.moodT <= 0) {
+        const k = Math.random();
+        g.mood = k < 0.55 ? 'fly' : k < 0.75 ? 'loop' : k < 0.87 ? 'hover' : 'gust';
+        g.moodT = { fly: 1.2 + Math.random() * 2, loop: 1.1 + Math.random() * 0.8, hover: 0.4 + Math.random() * 0.5, gust: 0.4 }[g.mood];
+        g.at = { x: g.x, y: g.y };
+        g.loopA = Math.atan2(g.vy, g.vx) - Math.PI / 2; g.loopDir = Math.random() < 0.5 ? 1 : -1;
+        if (g.mood === 'gust') { const a = Math.random() * Math.PI * 2; g.vx += Math.cos(a) * 170; g.vy += Math.sin(a) * 120; }
+      }
+      if (g.mood === 'loop') {
+        g.loopA += g.loopDir * 2.8 * dt;
+        tx = g.at.x + Math.cos(g.loopA) * 65; ty = g.at.y - 30 + Math.sin(g.loopA) * 65;
+      } else if (g.mood === 'hover') {
+        tx = g.at.x + noise(1.7, 3.3, 1) * 20; ty = g.at.y + noise(1.9, 3.7, 2) * 20;
+      }
+      // aim around the partner, never at them
+      const ax = tx - r.x, ay = ty - (r.y + 14), ad = Math.hypot(ax, ay) || 1;
+      if (ad < GHOST_KEEP + 20) { tx = r.x + (ax / ad) * (GHOST_KEEP + 20); ty = r.y + 14 + (ay / ad) * (GHOST_KEEP + 20); }
+    }
+    g.vx += ((tx - g.x) * 1.5 - g.vx * 1.1 + noise(1.3, 2.9, 1) * 70) * dt;
+    g.vy += ((ty - g.y) * 1.5 - g.vy * 1.1 + noise(1.1, 3.1, 2) * 70) * dt;
+    // it slides around a partner who stands still instead of floating into them
+    // (that would pop it); once they move or jump it doesn't dodge, so they can catch it
+    const still = !!r && this.partnerStill(g, r, dt);
+    if (still) {
+      const dx = g.x - r.x, dy = g.y - (r.y + 14), d = Math.hypot(dx, dy) || 1;
+      if (d < GHOST_KEEP) { const push = (GHOST_KEEP - d) * 14 * dt; g.vx += (dx / d) * push; g.vy += (dy / d) * push; }
+    }
+    const sp = Math.hypot(g.vx, g.vy), max = g.mood === 'gust' ? GHOST_SPEED * 1.5 : GHOST_SPEED;
+    if (sp > max) { g.vx *= max / sp; g.vy *= max / sp; }
+    g.x += g.vx * dt;
+    g.y = Phaser.Math.Clamp(g.y + g.vy * dt, 70, 640);
+    // and a firm floor, sliding round the edge: popping stays the partner's move
+    if (still) {
+      const dx = g.x - r.x, dy = g.y - (r.y + 14), d = Math.hypot(dx, dy) || 1;
+      if (d < GHOST_MIN) { g.x = r.x + (dx / d) * GHOST_MIN; g.y = r.y + 14 + (dy / d) * GHOST_MIN; }
+    }
+  }
+
+  // is the partner (nearly) standing still? smoothed speed of their snapshots
+  partnerStill(g, r, dt) {
+    const v = g.pr && dt > 0 ? Math.hypot(r.x - g.pr.x, r.y - g.pr.y) / dt : 0;
+    g.pr = { x: r.x, y: r.y };
+    g.pv = (g.pv ?? 0) * 0.85 + Math.min(v, 1500) * 0.15;
+    return g.pv < 40;
   }
 
   ghostRespawn() {
@@ -305,6 +423,8 @@ export class DuoLink {
         x: Math.round(p.x), y: Math.round(p.y), a: sc.me.anim, f: p.flipX ? 1 : 0,
         g: g ? 1 : 0, gx: g ? Math.round(g.x) : 0, gy: g ? Math.round(g.y) : 0,
         goal: this.atGoal ? 1 : 0, vis: p.visible ? 1 : 0,
+        sx: this.safe ? this.safe.x : 0, sy: this.safe ? this.safe.feet : 0,
+        gl: sc.me.gliding ? 1 : 0, sh: sc.abil?.shieldDir || 0,
       });
     }
 
@@ -331,10 +451,25 @@ export class DuoLink {
       const standing = b.enable && b.touching.down && Math.abs(b.bottom - (r.y - 9)) < 6 && Math.abs(p.x - r.x) < 40;
       if (standing && this.lastHeadX != null) b.x += r.x - this.lastHeadX;
       this.lastHeadX = r.x;
-    } else this.lastHeadX = null;
+      this.onHead = standing;
+    } else { this.lastHeadX = null; this.onHead = false; }
+
+    // where I last stood safely on real ground (sent along: a revived partner
+    // comes back next to it)
+    if (!sc.dead && !sc.done && b.enable && b.blocked.down && !this.onHead && !sc.hazards.some((h) => b.x < h.x + h.w + 20 && b.right > h.x - 20 && b.y < h.y + h.h && b.bottom > h.y - 10)) {
+      this.safe = { x: Math.round(p.x), feet: Math.round(b.bottom) };
+    }
 
     // partner can press plates and find secrets too
     sc.mech.remoteRect = partnerAlive ? { x: r.x - 28, y: r.y - 9, w: 56, h: 46 } : null;
+    // their glider and raised shield (the shield stops shots on my screen too)
+    if (!this.remoteGlider) this.remoteGlider = sc.add.image(0, 0, gliderTexture(sc)).setDepth(19).setVisible(false);
+    this.remoteGlider.setVisible(!!(partnerAlive && r.gl));
+    if (partnerAlive && r.gl) this.remoteGlider.setPosition(r.x, r.y - 30).setFlipX(!!r.f);
+    sc.mech.remoteShield = partnerAlive && r.sh ? (() => {
+      const left = r.x + (r.f ? -42.5 : -13.5), right = left + 56, feet = r.y + 37;
+      return { x: r.sh > 0 ? right + 2 : left - 18, y: feet - 110, w: 16, h: 110 };
+    })() : null;
 
     // pop the partner's bubble to revive them
     this.reviveT -= dt;
@@ -345,17 +480,15 @@ export class DuoLink {
       ui.toast('PARTNER REVIVED!');
     }
 
-    // my ghost bubble lingers where I died, then drifts slowly over to the partner
+    // my ghost bubble floats where I died for a moment, then flies to the partner
     // (the spot may be out of reach, e.g. deep in a pit)
     if (this.ghost) {
       const g = this.ghost;
       g.t += dt;
-      if (partnerAlive && g.t > GHOST_LINGER) {
-        const dx = r.x - g.x, dy = r.y - 110 - g.y, d = Math.hypot(dx, dy);
-        const step = Math.min(d, GHOST_SPEED * dt);
-        if (d > 0) { g.x += (dx / d) * step; g.y += (dy / d) * step; }
-      }
-      this.myBubble.setPosition(g.x, g.y + Math.sin(now / 300) * 4);
+      this.flyBubble(g, partnerAlive ? r : null, dt);
+      this.myBubble.setPosition(g.x, g.y);
+      // a soft wobble, like a soap bubble (after its pop-in)
+      if (g.t > 0.35) this.myBubble.setScale(1 + Math.sin(g.t * 5.3) * 0.04, 1 - Math.sin(g.t * 5.3) * 0.04);
       // both down: circle wipe, then back to the checkpoint
       if (r && r.g && !this.wiping) this.bothDown();
     }
@@ -368,8 +501,9 @@ export class DuoLink {
     const alive = !sc.dead && !sc.done && b.enable;
     const pr = alive ? { x: b.x, y: b.y, w: b.width, h: b.height } : null;
     const leverI = pr ? mech.nearLever(pr) : -1;
-    const crackI = pr ? mech.nearCrack(pr, sc.me.facing) : -1;
-    const canSmash = crackI >= 0 && duo.me === 'cat';
+    // (worlds with a kit break ore with Q instead: abilities.js)
+    const crackI = pr && !sc.level.kit ? mech.nearCrack(pr, sc.me.facing) : -1;
+    const canSmash = crackI >= 0 && !!sc.me.abilities.smash;
     const canThrow = alive && duo.me === 'raccoon' && partnerAlive && Math.abs(p.x - r.x) < 90 && Math.abs(p.y - r.y) < 70;
     if (act && this.atGoal && !this.won) { this.send('warp'); ui.toast('CALLING YOUR PARTNER…'); }
     else if (act && leverI >= 0) { if (mech.pull(leverI)) this.send('lever', { i: leverI }); }
@@ -377,7 +511,7 @@ export class DuoLink {
       if (mech.smash(crackI)) this.send('crack', { i: crackI });
       sc.me.squash(1.25, 0.8);
     } else if (act && canThrow) {
-      this.send('throw', { vx: sc.me.facing * 160, vy: -1350 });
+      this.send('throw', { vx: sc.me.facing * 160, vy: -1490 }); // ~8.5 rows, see duoLevels.js
       sc.me.squash(1.2, 0.85);
       sfx.stomp();
     }
@@ -429,7 +563,10 @@ export class DuoLink {
     if (a === b || b.t <= a.t || t >= b.t) return b;
     const k = Phaser.Math.Clamp((t - a.t) / (b.t - a.t), 0, 1);
     const far = Math.abs(b.x - a.x) > 300 || Math.abs(b.y - a.y) > 300; // respawn/teleport: snap
-    return { ...b, x: far ? b.x : a.x + (b.x - a.x) * k, y: far ? b.y : a.y + (b.y - a.y) * k, gx: a.gx + (b.gx - a.gx) * k, gy: a.gy + (b.gy - a.gy) * k };
+    // the bubble only has a position once the partner is one (before that it's 0,0)
+    const bub = a.g && b.g;
+    return { ...b, x: far ? b.x : a.x + (b.x - a.x) * k, y: far ? b.y : a.y + (b.y - a.y) * k,
+      gx: bub ? a.gx + (b.gx - a.gx) * k : b.gx, gy: bub ? a.gy + (b.gy - a.gy) * k : b.gy };
   }
 
   drawArrow(r, alive) {
@@ -455,6 +592,6 @@ export class DuoLink {
     this.offs.forEach((off) => off());
     this.offs = [];
     if (this.scene.mech) Object.assign(this.scene.mech.ai, { follow: false, emit: () => {} });
-    if (this.scene.mech) this.scene.mech.remoteRect = null;
+    if (this.scene.mech) { this.scene.mech.remoteRect = null; this.scene.mech.remoteShield = null; }
   }
 }

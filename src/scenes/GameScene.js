@@ -1,6 +1,8 @@
 import Phaser from 'phaser';
 import { WORLDS } from '../worlds/index.js';
-import { LEVELS, DUO_LEVELS, parseLevel, TILE, TOP, ROWS } from '../levels.js';
+import { LEVELS, parseLevel, TILE, TOP, ROWS } from '../levels.js';
+import { DUO_LEVELS } from '../duoLevels.js';
+import { Abilities } from '../abilities.js';
 import { makeCanvas, chunkedImage, addTexture } from '../art/util.js';
 import { run } from '../state.js';
 import { ui } from '../ui.js';
@@ -145,9 +147,13 @@ export class GameScene extends Phaser.Scene {
     if (import.meta.env.DEV && q.has('x')) this.start = { x: +q.get('x') * TILE + TILE / 2, y: TOP + 2 * TILE };
     this.respawn = { x: this.start.x, y: this.start.y };
     // solo is always the raccoon; in duo each client plays its chosen character
-    // and gets that character's co-op ability
+    // with the abilities of this world's kit (duoLevels.js). Worlds not redone yet
+    // keep the old duo moves. No double jump for anyone.
     const char = duoPlay ? duo.me : devDuo ? (dq.get('char') || 'raccoon') : 'raccoon';
-    const abilities = duoLevel ? (char === 'cat' ? { doubleJump: true } : { doubleJump: true, wallClimb: true }) : {};
+    const OLD_KIT = { cat: { smash: true }, raccoon: { wallClimb: true } };
+    const abilities = duoLevel ? { ...(level.kit ?? OLD_KIT)[char] } : {};
+    // in duo the goal only lets you through with all 3 franui
+    this.needAll = duoLevel;
     this.me = new Player(this, this.start.x, this.start.y, char, abilities);
     this.player = this.me.sprite;
     this.physics.add.collider(this.player, this.solids);
@@ -157,6 +163,8 @@ export class GameScene extends Phaser.Scene {
     // --- enemies, secrets, doors, carriers, wind, set-piece
     this.mech = new Mechanics(this, level, world, { duo: duoLevel });
     this.sweets.forEach((s) => { if (s.carrier) s.ride = this.mech.carriers.get(s.carrier); });
+    // the world's Q abilities (mine, build, ...)
+    this.abil = duoLevel ? new Abilities(this) : null;
 
     // dust puffs
     this.dust = this.add.particles(0, 0, 'fx-puff', {
@@ -178,17 +186,18 @@ export class GameScene extends Phaser.Scene {
       cam.scrollX = 0;
       this.tweens.add({ targets: cam, scrollX: level.width - W, duration: level.width * 9, yoyo: true, repeat: -1, ease: 'Sine.inOut' });
     } else {
-      cam.startFollow(this.player, true, 0.1, 0.1, 0, 60);
+      this.follow();
       cam.setDeadzone(80, 400);
       cam.fadeIn(450, 0, 0, 0);
     }
 
     // --- input
     this.keys = this.input.keyboard.addKeys({
-      left: 'LEFT', right: 'RIGHT', up: 'UP', a: 'A', d: 'D', w: 'W', space: 'SPACE', z: 'Z', e: 'E', x: 'X',
+      left: 'LEFT', right: 'RIGHT', up: 'UP', a: 'A', d: 'D', w: 'W', space: 'SPACE', z: 'Z', e: 'E', x: 'X', q: 'Q', f: 'F', r: 'R',
     });
     this.input.keyboard.addCapture('LEFT,RIGHT,UP,DOWN,SPACE');
     this.dead = false; this.done = false;
+    this.invuln = 0; // ms left of not being able to die (after a revive), shown by blinking
 
     // --- online partner (duo only)
     this.link = duoPlay ? new DuoLink(this) : null;
@@ -215,6 +224,20 @@ export class GameScene extends Phaser.Scene {
     const c = Math.floor((side > 0 ? b.right + 4 : b.left - 4) / TILE);
     const r = Math.floor((b.bottom - 6 - TOP) / TILE); // at the feet: climb until they clear the top
     return lv.solid(c, r) || lv.solidDuo(c, r);
+  }
+
+  // the camera follows the player, or in duo the player's bubble while they're down
+  follow(target = this.player) {
+    this.cameras.main.startFollow(target, true, 0.1, 0.1, 0, 60);
+  }
+
+  // at the goal without all 3 franui (duo)
+  needFranui() {
+    const now = this.mech.t;
+    if (now - (this.needT ?? -1e9) < 3500) return;
+    this.needT = now;
+    sfx.nope();
+    ui.toast(`FIND ALL 3 FRANUI FIRST (${run.levelSweets}/3)`);
   }
 
   openGoal() {
@@ -249,6 +272,7 @@ export class GameScene extends Phaser.Scene {
       right: k.right.isDown || k.d.isDown || t.right,
       jump: k.up.isDown || k.w.isDown || k.space.isDown || k.z.isDown || t.jump,
       action: k.e.isDown || k.x.isDown || t.action,
+      ability: k.q.isDown || k.f.isDown || t.ability,
     };
   }
 
@@ -263,18 +287,27 @@ export class GameScene extends Phaser.Scene {
     if (!playing) return;
     const p = this.player, b = p.body;
 
+    // duo: R = give up here (stuck somewhere): become a bubble, your partner pops you
+    if (this.needAll && Phaser.Input.Keyboard.JustDown(this.keys.r)) return this.die();
+    this.abil?.update(delta, inp);
     this.me.update(delta, inp, m);
     if (m.bounce) { this.me.bounce(inp.jump); sfx.stomp(); }
 
     // blob shadow on the ground below
     this.updateShadow();
+    ui.hudFade(b.top < 110);
 
-    // hazards
+    // hazards (not while invulnerable; falling out of the world always counts)
     const px = b.x, py = b.y, pw = b.width, ph = b.height;
-    for (const h of this.hazards) {
-      if (px < h.x + h.w && px + pw > h.x && py < h.y + h.h && py + ph > h.y) return this.die();
+    const safe = this.invuln > 0;
+    if (this.invuln > 0) {
+      this.invuln -= delta;
+      p.setAlpha(this.invuln > 0 && Math.floor(this.invuln / 90) % 2 ? 0.35 : 1);
     }
-    if (m.die || b.top > H + 40) return this.die();
+    for (const h of this.hazards) {
+      if (!safe && px < h.x + h.w && px + pw > h.x && py < h.y + h.h && py + ph > h.y) return this.die();
+    }
+    if ((m.die && !safe) || b.top > H + 40) return this.die();
 
     // sweets
     for (const s of this.sweets) {
@@ -290,10 +323,11 @@ export class GameScene extends Phaser.Scene {
         this.link?.send('checkpoint', { i });
       }
     });
-    // goal (in duo both players have to get there)
+    // goal (in duo both players have to get there, with all 3 franui)
     const z = this.goal.zone;
-    if (this.goalOpen && px < z.x + z.w && px + pw > z.x && py < z.y + z.h && py + ph > z.y) {
-      if (this.link) this.link.reachGoal(); else this.win();
+    if (px < z.x + z.w && px + pw > z.x && py < z.y + z.h && py + ph > z.y) {
+      if (this.needAll && run.levelSweets < 3) this.needFranui();
+      else if (this.goalOpen) { if (this.link) this.link.reachGoal(); else this.win(); }
     }
     run.elapsed += delta;
   }
@@ -355,7 +389,10 @@ export class GameScene extends Phaser.Scene {
     ui.sweets(run.levelSweets);
     if (run.levelSweets >= 3) {
       sfx.unlock();
-      this.time.delayedCall(700, () => ui.toast('ALL 3 FRANUI FOUND!'));
+      // some duo levels open the goal with the 3rd franui (Minecraft: the portal lights)
+      const opens = this.level.openOnFranui && !this.goalOpen;
+      if (opens) this.openGoal();
+      this.time.delayedCall(700, () => ui.toast(opens ? 'ALL 3 FRANUI FOUND · THE WAY OUT IS OPEN!' : 'ALL 3 FRANUI FOUND!'));
     }
   }
 
@@ -372,6 +409,7 @@ export class GameScene extends Phaser.Scene {
     }).setDepth(30);
     burst.explode(26);
     p.setVisible(false); p.body.enable = false; this.shadow.setVisible(false);
+    this.me.glider?.setVisible(false);
     this.cameras.main.shake(180, 0.008);
     this.cameras.main.flash(160, 255, 60, 80, false);
     this.time.delayedCall(650, () => burst.destroy());
@@ -380,17 +418,20 @@ export class GameScene extends Phaser.Scene {
     this.time.delayedCall(650, () => this.respawnAt(this.respawn.x, this.respawn.y, true));
   }
 
-  // bring the player back at (x, feet y); resetWorld re-arms enemies and set-pieces
-  respawnAt(x, y, resetWorld) {
+  // bring the player back at (x, feet y); resetWorld re-arms enemies and set-pieces;
+  // invulnMs: that long nothing can kill you (a revive)
+  respawnAt(x, y, resetWorld, invulnMs = 0) {
     const p = this.player;
     p.body.enable = true;
     p.body.reset(x, y - 42);
-    if (resetWorld) this.mech.reset(x);
+    if (resetWorld) { this.mech.reset(x); this.abil?.reset(); }
     p.setVisible(true).setAlpha(0).setScale(1);
     this.tweens.add({ targets: p, alpha: 1, duration: 250 });
     this.squash(0.7, 1.3);
     this.me.resetState();
     this.dead = false;
+    this.invuln = invulnMs;
+    this.follow();
   }
 
   win() {
@@ -411,6 +452,7 @@ export class GameScene extends Phaser.Scene {
 
   cleanup() {
     this.link?.destroy();
+    this.abil?.destroy();
     this.tweens.killAll();
     this.world.cleanup?.(this);
   }

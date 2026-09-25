@@ -64,6 +64,9 @@ body {
 .sweets img.got { opacity: 1; filter: none; transform: scale(1.1); }
 .chip.icon { pointer-events: auto; cursor: pointer; font-size: max(12px, 1.5cqw); color: var(--cream); padding: 0.45cqw 0.8cqw; }
 
+#hud { transition: opacity .25s; }
+#hud.faded { opacity: 0.22; }
+
 #toast {
   position: absolute; left: 50%; top: 13%; transform: translate(-50%, -10px);
   font-family: var(--display); font-size: max(10px, 1.3cqw);
@@ -248,6 +251,7 @@ h2 { font-size: max(15px, 2.6cqw); }
 .tbtn.jump { width: max(72px, 10cqw); height: max(72px, 10cqw); }
 .tbtn.on { background: rgba(255, 255, 255, 0.28); }
 .tbtn.act { margin: 0 1.6cqw 0 auto; }
+.tbtn.act2 { margin-right: 1.6cqw; }
 .tbtn[hidden] { display: none; }
 
 @media (prefers-reduced-motion: reduce) {

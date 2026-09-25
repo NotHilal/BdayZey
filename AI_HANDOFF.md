@@ -31,7 +31,7 @@ load time** and registered as Phaser textures. Music and sound are synthesized t
 | `src/main.js` | Phaser config. Dev-only URL flags: `?timer`, `?canvas`, `?fps=` (used by `tools/duo.mjs`). |
 | `src/scenes/BootScene.js` | Builds shared sprites (raccoon, cat, franui, FX), waits for fonts, calls `ui.init`. |
 | `src/scenes/GameScene.js` | Builds a world, collision, camera, collectibles, checkpoints, death/respawn, win. Modes: `play`, `attract`, `finale`. |
-| `src/player.js` | `Player`: sprite + body + platformer controller (movement constants live here). Duo abilities: `doubleJump` (cat), `wallClimb` (raccoon), `launch()` (thrown). |
+| `src/player.js` | `Player`: sprite + body + platformer controller (movement constants live here). Duo abilities: `wallClimb` (raccoon), `launch()` (thrown). `doubleJump` exists but is off for both. |
 | `src/mechanics.js` | Shared level mechanics: secret alcoves, timed doors + pressure plates, franui carriers, wind currents, set-piece triggers, the enemy loop. |
 | `src/duo.js` | Duo session (`duo`: create/join, heartbeat, disconnect) and `DuoLink` (per-world sync: partner rendering, shared franui/checkpoints/stomps, revive, head-stacking, throw, both-at-goal). |
 | `src/net.js` | Transport wrapper: `createRoom/joinRoom/send/on/leave`. WebSocket relay with auto-reconnect/rejoin, or BroadcastChannel (same browser only) in dev without `VITE_RELAY_URL`. |
@@ -43,6 +43,8 @@ load time** and registered as Phaser textures. Music and sound are synthesized t
 | `src/sfx.js` | Synthesized SFX + the music step sequencer (`music.play(key)`), mute toggle. |
 | `src/tracks.js` | Music data: one original loop per world + Happy Birthday for the finale. Format documented at the top. |
 | `src/levels.js` | Level layouts via a builder API (grid + `things`), plus `parseLevel`. |
+| `src/duoLevels.js` | Duo levels designed for two (solo untouched): per-world ability `kit`, `openOnFranui`. Redone so far: Minecraft. Other worlds fall back to the old duo layouts (solo + inserts). |
+| `src/abilities.js` | Per-world duo abilities on Q (F too): `mine` (cat breaks ore = cracked blocks), `build` (raccoon: tap Q places a block, hold Q takes all back; 3 max; merged into one body per stack). Blocks sync via `block` messages. |
 | `src/art/util.js`, `terrain.js` | Canvas helpers and the shared smooth-terrain painter. |
 | `src/art/sprites.js` | Characters (`CHARACTERS`: raccoon, cat) drawn as vectors on 43x28, `pixelize()`d, scaled 3x; franui; FX. |
 | `src/worlds/*.js` | One module per world (see the contract below). `index.js` sets the order. |
@@ -80,6 +82,58 @@ What each world has now:
 | Valorant | Cypher tripwires (on/off) | fake crates, pillar top, switch room door | Spike planted: 12 s countdown |
 | RDR2 | rattlesnakes (rattle, strike; stompable) | camp hen, platform, old mine behind fake rock | posse chases you to camp |
 
+## Duo redesign (all 5 worlds built; play-testing pending, see DUO_TESTS.md)
+- Each world has its own duo level in `duoLevels.js` (solo levels untouched) and its own ability pair (not carried
+  over between worlds). Basics everywhere: raccoon throws the cat (E), stand on heads, plates, levers, bubbles.
+  Difficulty rises per world: 1 tutorial → 5 chains under pressure. Levels are ~186-191 columns (solo ~100-112).
+| World | Cat | Raccoon | Level pieces added for it |
+|---|---|---|---|
+| Minecraft | **mine** (Q: cracked ore in front) | **build** (tap Q: block; hold Q: take all back; 3 max) | ore = `crack` things, `crackCell`/`buildTexture` world hooks |
+| Genshin | **glide** (jump, press jump again in the air, hold) | **climb** (existing wallClimb + stamina bar) | `bridge(id,…)` appears on its lever; `wind(…, id)` off until its lever |
+| LoL | **flash** (Q: 3 tiles, through thin terrain walls, not gates/ore; 2.5s cd) | **shield** (hold Q: stops shots, slower walk) | `turret(c, r, dir, id, len)` lane turrets (lol.js `laneTurret`, beat on `mech.t`, no messages) |
+| Valorant | **recon** (Q: hidden platforms solid+visible 5s; 6s cd) | **barrier** (Q: 3-high ice wall in front, 6s, one at a time) | `ghost(c, r, w)` hidden platforms; `spike: 40` level field |
+| RDR2 | **deadeye** (Q: `mech.slow` 3s at 0.3×: enemies, posse, gate timers; 9s cd) | **lasso** (Q: lever ≤6 tiles ahead, else yank the cat ≤7 tiles) | `mech.timeScale`; yank = `me.launch(vx, vy, lockMs)` |
+- Code: movement abilities in `player.js` (glide, climb, `speedMul`, `launch(…, lockMs)`), Q abilities + HUD + hints in
+  `abilities.js`; sync via `ab` messages (recon/barrier/deadeye/lasso), `block` messages, and `state` flags `gl` (gliding),
+  `sh` (shield dir), `sx/sy` (last safe ground). Levers also switch bridges, winds and turrets (`Mechanics.pull`).
+- **In duo the goal needs all 3 franui** (`GameScene.needAll`); Minecraft's portal lights on the 3rd (`openOnFranui`).
+- **R** (duo) = give up and become a bubble (so a stuck player, e.g. in RDR2's well, can always recover).
+- Build rules: on the ground a block goes in the column in front (a bridge tile over a gap, else a step; you get nudged
+  back if you poke into it); in the air it goes on top of whatever is below you (towers grow one row per jump). Blocks
+  and ice walls never press plates. Stacked blocks/ice are merged into one body per column: separate bodies in a wall
+  face snag jumps that push into them, so also keep ore off faces players climb.
+- The HUD fades while the player is near the top of the screen (puzzles up there stay visible).
+- Throw is vy −1490 (lifts ≈ 544px ≈ 8.5 rows): "one block higher" makes or breaks a throw with ~32px margins.
+- Measured: jump ≈ 222px up, gaps ≤ 4 tiles; ground glide ≈ 13.5 tiles; a throw + glide ≈ 26 tiles.
+- Verified by `tools/teamwork.mjs`: every Minecraft puzzle; Genshin puzzles 1, 2, 4 and "ground glide falls short".
+  LoL/Valorant/RDR2 only pass the static level check and a load/ability smoke test: **play-test them** (DUO_TESTS.md).
+- Test-harness gotcha: `?x=` spawns you in the air at row 2; after a death you respawn there (not on the ground).
+
+### Smaller fixes made along the way (so they aren't undone)
+- Connection lost: the level pauses; a **Back to title** button (`ui.toTitle`) leaves the room. No "continue solo":
+  duo never turns into solo (next/replay are blocked while the partner is gone).
+- Partner's bubble no longer flashes in from (0,0): `DuoLink.sample` only interpolates bubble positions between two
+  bubble snapshots.
+- Minecraft creeper: a stale "gone" from the host while the guest's creeper walks no longer plays a phantom explosion
+  (only a fusing creeper explodes).
+- RDR2 posse: it waits while you're a bubble and falls back behind you when you're revived (no instant re-death).
+- Hold gates: plates 4 columns from the gate (a 2-column gap let one player sneak through in the 150ms grace).
+- Double jump is off for both characters; the throw was strengthened to compensate.
+- Camera follows your bubble while you're down; the bubble flies freely (moods: fly, loop, hover, gust).
+- Performance: MSAA off, transparent rows trimmed from big textures, automatic lite mode (quality.js).
+
+### Ideas (not built yet)
+- World-cleared screen card "NEW ABILITY: Glide (cat)" with its key, and a short safe training area per world.
+- A "both abilities" finale per world that is a longer chain; sync the Valorant Spike timer and the RDR2 posse between
+  players (each client runs its own now).
+- Cat riding on the raccoon's head while he climbs (Genshin); raccoon Anemo gust (updraft on Q) as a second Genshin tool.
+- LoL: shield also reflects shots back at the turret; flash through Teemo's mushrooms.
+- Valorant: ice wall blocks Cypher tripwires; recon also marks the tripwire timing.
+- RDR2: lasso swing on hook posts; a horse the cat rides during the posse chase; dead eye marks targets.
+- Moving platforms (ride-along), fast crushers for dead eye, rolling barrels.
+- Automate LoL/Valorant/RDR2 puzzles in `tools/teamwork.mjs` (helpers for throw, glide, climb, Q already there).
+- Performance: lower internal resolution for very weak GPUs (see Gotchas #10); lite mode already drops overlays.
+
 ## Duo (online)
 - Title → **DUO ONLINE** → pick Cat or Raccoon → **Create room** (4-letter code + invite link `?room=ABCD`),
   or type a code / open the link to join (the joiner gets the other character). Host presses **Start together**.
@@ -97,7 +151,7 @@ What each world has now:
   (the LoL turret's aim/bolt). Triggers fire when either player passes them. Hits are always checked against the
   local player only (e.g. a creeper blast kills whoever is in range on their own screen).
 - New enemies with state need `getState()/setState()` and must check `scene.mech.ai.follow` before deciding anything.
-- Abilities (duo only): **both double-jump**. Raccoon: climbs real walls (hold into the wall; tap jump while pushing
+- Abilities (duo only): **no double jump** (turned off for both). Raccoon: climbs real walls (hold into the wall; tap jump while pushing
   in to hop up; jump away to kick off) and throws the partner up. Cat: smashes cracked blocks. The action key E / ✋
   does what fits: call partner (at goal) > pull lever > smash (cat) > throw (raccoon). An "E" bubble marks it, and
   one-time toasts explain each obstacle. Also: stand on your partner's head; revive bubbles; partner presses plates.
@@ -106,14 +160,21 @@ What each world has now:
   right, so call them right-to-left with solo column numbers). Solo levels are untouched.
   - throw: gate + lever on a ledge 7 rows up; only a thrown cat reaches it (raccoon throws).
   - wall: 7-row duo wall only the raccoon can climb, then a full-height cracked barrier only the cat can smash.
-  - cage: gate whose lever is inside cracked blocks (cat).  hold: gate with hold plates on both sides.
+  - cage: gate whose lever is inside cracked blocks (cat).  hold: gate with hold plates on both sides,
+    4 columns away (13-column stretch): a hold plate keeps the gate open 150ms after you step off and the gate never
+    closes on someone in it, so a plate closer than ~2 columns lets one player sneak through alone.
   Per world: Minecraft throw + hold + wall; Genshin throw + cage + hold; LoL throw + wall + hold;
   Valorant throw + wall (Spike timer +18 s in duo); RDR2 throw + cage.
   Gates and cracks aren't climbable (`GameScene.climbable` only accepts grid walls), gates/cracks starting at row 0
   extend 400px above the screen, levers open gates for good, cracks/levers are shared (`lever`, `crack` messages).
-  Measured limits (`tools/teamwork.mjs`): double jump ≈ 380px (feet reach y≈149 from 528), throw ≈ 600px+.
-- Death in duo: you become a bubble that lingers 0.8 s, then drifts slowly to the partner (`GHOST_SPEED`); no timeout.
-  The partner pops it and you reappear next to them. Both bubbles: circle wipe (`ui.iris`, `#iris` in style.css),
+  Measured limits (`tools/teamwork.mjs`): single jump ≈ 222px (feet reach y≈306 from 528); the throw (vy −1450)
+  lifts the cat ≈ 514px (feet reach y≈14), clearing the 7-row ledge and wall (top y=80) with ~65px to spare.
+- Death in duo: you become a bubble (the camera follows it) that floats at the death spot for 0.8 s, then flies
+  freely, unpredictably (meanders, loops, hovers, gusts), to the partner and circles them loosely (`flyBubble`
+  in duo.js, `GHOST_*` constants); no timeout. It keeps
+  80 px from a partner standing still, so popping it takes a move or a jump. You reappear on safe ground 1-3
+  columns behind them (`DuoLink.safeSpot`, from their last safe ground `sx/sy` in `state`; else in front; never
+  through a wall/gate or onto a hazard) and can't die for 1 s (`GameScene.invuln`, blinking; falling out still counts). Both bubbles: circle wipe (`ui.iris`, `#iris` in style.css),
   both back at the last checkpoint.
 - Disconnect: after 8 s without messages the game pauses ("connection lost") and resumes when the partner is back.
   Duo never turns into solo: no world starts, and the clear/finale screens don't move on, while the partner is gone.

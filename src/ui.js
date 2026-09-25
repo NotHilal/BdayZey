@@ -28,7 +28,7 @@ function sweetImgs(n, got) {
 }
 
 export const ui = {
-  touch: { left: false, right: false, jump: false, action: false },
+  touch: { left: false, right: false, jump: false, action: false, ability: false },
 
   get screen() { return screen; },
 
@@ -47,6 +47,7 @@ export const ui = {
     $('startBtn').addEventListener('click', () => { duo.reset(); this.begin(); });
     this.initDuo();
     $('nextBtn').addEventListener('click', () => this.next());
+    $('lostTitleBtn').addEventListener('click', () => this.toTitle());
     $('replayBtn').addEventListener('click', () => this.replay());
     $('muteBtn').addEventListener('click', () => { $('muteBtn').textContent = sfx.toggle() ? '🔇' : '🔊'; });
     $('muteBtn').textContent = sfx.muted ? '🔇' : '🔊';
@@ -70,7 +71,7 @@ export const ui = {
         el.addEventListener('pointercancel', off);
         el.addEventListener('pointerleave', off);
       };
-      bind('tLeft', 'left'); bind('tRight', 'right'); bind('tJump', 'jump'); bind('tAct', 'action');
+      bind('tLeft', 'left'); bind('tRight', 'right'); bind('tJump', 'jump'); bind('tAct', 'action'); bind('tAbility', 'ability');
     }
     this.coarse = coarse;
 
@@ -96,6 +97,21 @@ export const ui = {
     screen = 'play';
     show('titleOverlay', false);
     startWorld(0);
+  },
+
+  // leave the duo game (partner gone for good) and go back to the title screen
+  toTitle() {
+    duo.reset();
+    screen = 'title';
+    clearInterval(finaleCycle);
+    clearTimeout(clearTimer);
+    music.stop();
+    ['lostOverlay', 'clearOverlay', 'finaleOverlay', 'hud', 'touch'].forEach((id) => show(id, false));
+    this.countdown(null);
+    this.iris(null);
+    this.openDuo(false);
+    show('titleOverlay', true);
+    startWorld(0, 'attract');
   },
 
   // ------------------------------------------------------------------ duo lobby
@@ -212,6 +228,19 @@ export const ui = {
 
   sweets(n) { $('hudSweets').innerHTML = sweetImgs(3, n); },
 
+  // fade the HUD while the player is up at the top of the screen, under it
+  hudFade(on) { $('hud').classList.toggle('faded', on); },
+
+  // the world ability in the HUD (e.g. the raccoon's blocks left) and its touch
+  // button; null hides both
+  kitChip(text) {
+    show('hudKit', text != null);
+    show('tAbility', text != null);
+    if (text == null) return;
+    $('hudKit').textContent = text;
+    $('tAbility').textContent = [...text][0];
+  },
+
   // big set-piece timer under the HUD (Valorant spike); null hides it
   countdown(sec, label = '') {
     const el = $('countdown');
@@ -247,7 +276,7 @@ export const ui = {
   worldCleared(i, world) {
     screen = 'clear';
     this.countdown(null);
-    this.touch.left = this.touch.right = this.touch.jump = this.touch.action = false;
+    this.touch.left = this.touch.right = this.touch.jump = this.touch.action = this.touch.ability = false;
     show('touch', false);
     $('clearKicker').textContent = `WORLD ${i + 1} OF ${WORLDS.length} COMPLETE`;
     $('clearTitle').textContent = world.clearText || `${world.name} CLEARED!`;

@@ -227,7 +227,7 @@ export default {
   lateGoal: true, // the waypoint unlocks as you reach it
   caveColor: 0x2c2418,
   windTint: 0x9ff8e4,
-  mech: { door: '#8f96a8', trim: '#c6ccd9', plate: '#7ff0ff' },
+  mech: { door: '#8f96a8', trim: '#c6ccd9', plate: '#7ff0ff', bridge: '#a8733f' },
 
   paintSky(ctx, W, H) {
     vGradient(ctx, 0, 0, W, H, [[0, '#3f93e6'], [0.45, '#86c8f4'], [0.75, '#cdeefd'], [1, '#f2fbff']]);

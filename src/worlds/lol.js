@@ -401,7 +401,8 @@ export default {
   },
 
   // Teemo hides in a brush, rustles, then pops out. Jump on him while he's up.
-  enemy(scene, t) {
+  enemy(scene, t, level) {
+    if (t.kind === 'lane') return laneTurret(scene, t, level);
     if (t.kind !== 'teemo') return null;
     if (!scene.textures.exists('w_lol_teemo')) addTexture(scene, 'w_lol_teemo', teemoTexture());
     if (!scene.textures.exists('w_lol_brush0')) addTexture(scene, 'w_lol_brush0', brushTexture(1));
@@ -469,9 +470,10 @@ export default {
         aim.clear();
         for (const b of bolts) {
           b.img.x += b.vx * dt; b.img.y += b.vy * dt; b.life += dt;
-          if (p && Math.hypot(b.img.x - p.x, b.img.y - p.body.center.y) < 30) { clear(); return 'kill'; }
+          if (!b.gone && scene.abil?.shieldHit(b.img.x, b.img.y)) { b.gone = true; b.img.destroy(); scene.puff(b.img.x, b.img.y, 6); continue; }
+          if (!b.gone && p && Math.hypot(b.img.x - p.x, b.img.y - p.body.center.y) < 30) { clear(); return 'kill'; }
         }
-        bolts = bolts.filter((b) => { if (b.life > 2.4) { b.img.destroy(); return false; } return true; });
+        bolts = bolts.filter((b) => { if (b.gone) return false; if (b.life > 2.4) { b.img.destroy(); return false; } return true; });
         if (down) return;
         const ai = scene.mech.ai;
         const q = ai.nearest(tx);
@@ -528,3 +530,80 @@ export default {
     scene.add.image(0, 0, 'w_lol_vig').setOrigin(0).setScrollFactor(0).setDepth(45);
   },
 };
+
+// Lane turret (duo): a small tower that shoots along its row, toward t.dir, on a
+// fixed beat. The shots only depend on the shared world clock (mech.t), so both
+// players see the same ones without any messages. A shot stops at the first wall,
+// closed gate or ice/blocks, at a raised shield (the raccoon's, LoL), or on you.
+// A lever with the turret's id switches it off for good.
+const LANE = { period: 1300, speed: 430 }; // range per turret: t.len tiles
+function laneTexture(scene) {
+  const key = 'w_lol_lane';
+  if (!scene.textures.exists(key)) {
+    const { canvas, ctx } = makeCanvas(64, 96);
+    ctx.fillStyle = '#2a3140'; ctx.fillRect(10, 30, 44, 66);
+    ctx.fillStyle = '#3d4658'; ctx.fillRect(14, 34, 36, 58);
+    ctx.fillStyle = GOLD_DK; ctx.fillRect(6, 24, 52, 8); ctx.fillRect(6, 88, 52, 8);
+    poly(ctx, [[8, 24], [32, 4], [56, 24]], '#1f2530');
+    glow(ctx, 32, 50, 16, '#ff4f5e', 0.9);
+    ctx.fillStyle = '#ff9aa3'; ctx.beginPath(); ctx.arc(32, 50, 7, 0, Math.PI * 2); ctx.fill();
+    addTexture(scene, key, canvas);
+  }
+  return key;
+}
+
+function laneTurret(scene, t, level) {
+  const feet = rowFeet(t.r), x = colX(t.c), dir = t.dir || -1;
+  const y = feet - 26, x0 = x + dir * 26;
+  const img = scene.add.image(x, feet, laneTexture(scene)).setOrigin(0.5, 1).setDepth(6).setFlipX(dir > 0);
+  const eye = scene.add.image(x, feet - 46, 'fx-dot').setScale(1.4).setTint(0xff4f5e).setAlpha(0.5).setBlendMode(Phaser.BlendModes.ADD).setDepth(7);
+  const phase = (t.c * 137) % LANE.period, range = (t.len || 20) * 64;
+  const shots = new Map(); // shot number -> { img, gone }
+  let off = false;
+  const solidAt = (px) => {
+    const c = Math.floor(px / TILE), r = Math.floor((y - TOP) / TILE);
+    if (level.solid(c, r) || scene.abil?.solidAt(c, r)) return true;
+    // closed gates stop shots too
+    return Object.values(scene.mech.doors).some((d) => !d.open && px > d.rect.x && px < d.rect.x + d.rect.w && y > d.rect.y && y < d.rect.y + d.rect.h);
+  };
+  const clear = () => { shots.forEach((s) => s.img?.destroy()); shots.clear(); };
+  return {
+    stompable: false,
+    update(ms, dt, p) {
+      if (off) return;
+      const k1 = Math.floor((ms - phase) / LANE.period);
+      const k0 = k1 - Math.ceil((range / LANE.speed) * 1000 / LANE.period);
+      // charge glow just before a shot
+      const u = ((ms - phase) % LANE.period + LANE.period) % LANE.period;
+      eye.setScale(1.4 + Math.max(0, (u - LANE.period + 350) / 350) * 1.6);
+      for (const k of [...shots.keys()]) if (k < k0) { shots.get(k).img?.destroy(); shots.delete(k); }
+      for (let k = Math.max(k0, 0); k <= k1; k++) {
+        let s = shots.get(k);
+        if (!s) {
+          s = { img: scene.add.image(x0, y, 'fx-dot').setScale(0.9).setTint(0xff6a5e).setBlendMode(Phaser.BlendModes.ADD).setDepth(28), gone: false };
+          shots.set(k, s);
+          if (ms - (phase + k * LANE.period) < 80 && p && Math.abs(p.x - x) < 900) sfx.shot();
+        }
+        if (s.gone) continue;
+        const bx = x0 + dir * LANE.speed * (ms - (phase + k * LANE.period)) / 1000;
+        s.img.setPosition(bx, y);
+        if (Math.abs(bx - x0) > range || solidAt(bx) || scene.abil?.shieldHit(bx, y)) {
+          s.gone = true; s.img.destroy(); s.img = null; scene.puff(bx, y, 4); continue;
+        }
+        if (p && p.body.enable && Math.abs(bx - p.x) < 26 && Math.abs(y - p.body.center.y) < 30) {
+          s.gone = true; s.img.destroy(); s.img = null;
+          return 'kill';
+        }
+      }
+    },
+    hitbox() { return null; },
+    // a lever with this turret's id switches it off
+    lever(id) {
+      if (id !== t.id || off) return;
+      off = true; clear();
+      eye.destroy();
+      scene.tweens.add({ targets: img, alpha: 0.35, duration: 400 });
+    },
+    reset() { clear(); },
+  };
+}
