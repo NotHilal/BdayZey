@@ -152,9 +152,28 @@ export function chunkedImage(scene, keyBase, width, height, paint, opts = {}) {
     ctx.translate(-x0, 0);
     paint(ctx, x0, x0 + w);
     ctx.restore();
+    // drop fully transparent rows above and below: the GPU still has to blend
+    // every pixel of an image, even invisible ones (a big cost on weak GPUs)
+    const [top, bottom] = opaqueRows(ctx, w, height);
+    if (bottom <= top) continue;
+    let tex = canvas;
+    if (top > 0 || bottom < height) {
+      tex = makeCanvas(w, bottom - top).canvas;
+      tex.getContext('2d').drawImage(canvas, 0, top, w, bottom - top, 0, 0, w, bottom - top);
+    }
     const key = `${keyBase}_${i}`;
-    addTexture(scene, key, canvas, opts.nearest);
-    images.push({ key, x: x0 });
+    addTexture(scene, key, tex, opts.nearest);
+    images.push({ key, x: x0, y: top });
   }
   return images;
+}
+
+// first and one-past-last row of a canvas that has any visible pixel
+function opaqueRows(ctx, w, h) {
+  const data = new Uint32Array(ctx.getImageData(0, 0, w, h).data.buffer);
+  const rowEmpty = (y) => { for (let x = y * w, e = x + w; x < e; x++) if (data[x] > 0x00ffffff) return false; return true; };
+  let top = 0, bottom = h;
+  while (top < h && rowEmpty(top)) top++;
+  while (bottom > top && rowEmpty(bottom - 1)) bottom--;
+  return [top, bottom];
 }

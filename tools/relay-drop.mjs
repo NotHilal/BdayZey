@@ -63,7 +63,7 @@ check('no disconnect screen for a short outage', await A.evaluate(() => document
 
 // long outage: the pause screen shows, then goes away by itself on reconnect
 await stopRelay();
-check('long outage shows "partner disconnected"', await until(A, () => !document.getElementById('lostOverlay').hidden, 15000));
+check('long outage shows "connection lost"', await until(A, () => !document.getElementById('lostOverlay').hidden, 15000));
 await startRelay();
 check('it clears by itself when the server is back', (await until(A, () => document.getElementById('lostOverlay').hidden, 15000)) && (await until(B, () => document.getElementById('lostOverlay').hidden, 15000)));
 check('game running again on both', await A.evaluate(() => window.__game.sys.isActive()) && await B.evaluate(() => window.__game.sys.isActive()));

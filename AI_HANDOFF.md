@@ -39,6 +39,7 @@ load time** and registered as Phaser textures. Music and sound are synthesized t
 | `deploy/` | Hetzner setup: `deploy.sh` (build + upload + setup), `setup.sh` (Node, Caddy, systemd), `Caddyfile`, `zsq-relay.service`. |
 | `src/ui.js` | DOM UI and flow (title → lobby → worlds → clear screens → finale). |
 | `src/state.js` | Run stats (deaths, time, franui). |
+| `src/quality.js` | Lite mode for weak GPUs: if a world runs under 48 fps it hides the cosmetic full-screen overlays (vignettes, sun rays, grain) and ambient particles; remembered in localStorage. `?quality=lite|high` overrides. |
 | `src/sfx.js` | Synthesized SFX + the music step sequencer (`music.play(key)`), mute toggle. |
 | `src/tracks.js` | Music data: one original loop per world + Happy Birthday for the finale. Format documented at the top. |
 | `src/levels.js` | Level layouts via a builder API (grid + `things`), plus `parseLevel`. |
@@ -92,8 +93,7 @@ What each world has now:
 - **The host runs the world for both** (`mech.ai`): it broadcasts its world clock (`clock`, 2×/s) so every
   time-based mover (carriers, slimes, Teemo, tripwires) is in the same place on both screens, and the state of
   stateful enemies (`foes`, 12×/s, via each enemy's `getState()/setState()`: creeper, snakes). Enemy AI aims at
-  `mech.ai.nearest(x)`, the closest living player. The guest has `ai.follow = true` and only mirrors; if the host
-  drops, the guest takes over. Set-piece events go through `ai.emit(kind, data)` → partner's `setpiece.receive()`
+  `mech.ai.nearest(x)`, the closest living player. The guest has `ai.follow = true` and only mirrors. Set-piece events go through `ai.emit(kind, data)` → partner's `setpiece.receive()`
   (the LoL turret's aim/bolt). Triggers fire when either player passes them. Hits are always checked against the
   local player only (e.g. a creeper blast kills whoever is in range on their own screen).
 - New enemies with state need `getState()/setState()` and must check `scene.mech.ai.follow` before deciding anything.
@@ -112,7 +112,11 @@ What each world has now:
   Gates and cracks aren't climbable (`GameScene.climbable` only accepts grid walls), gates/cracks starting at row 0
   extend 400px above the screen, levers open gates for good, cracks/levers are shared (`lever`, `crack` messages).
   Measured limits (`tools/teamwork.mjs`): double jump ≈ 380px (feet reach y≈149 from 528), throw ≈ 600px+.
-- Disconnect: after 8 s without messages the game pauses with "Continue solo".
+- Death in duo: you become a bubble that lingers 0.8 s, then drifts slowly to the partner (`GHOST_SPEED`); no timeout.
+  The partner pops it and you reappear next to them. Both bubbles: circle wipe (`ui.iris`, `#iris` in style.css),
+  both back at the last checkpoint.
+- Disconnect: after 8 s without messages the game pauses ("connection lost") and resumes when the partner is back.
+  Duo never turns into solo: no world starts, and the clear/finale screens don't move on, while the partner is gone.
 - Messages: `hello welcome start ping bye state collect collected checkpoint stomp revive throw atGoal warp next replay`.
 
 ## Gotchas (learned the hard way)
@@ -128,7 +132,10 @@ What each world has now:
    `?timer&canvas&fps=20`. Use `page.evaluate(el.click())`, not `page.click()`, on a background page.
 9. Secret alcoves: terrain is painted from `level.view` (secrets look solid), then the alcove is cut out and redrawn
    as an overlay. The decorate/collision code uses the raw `level`.
-10. `R.belly` in `sprites.js` isn't painted directly but is part of the raccoon palette used by `pixelize()`, so it's kept.
+10. Performance is GPU fill rate, not JS (the main thread is ~90% idle): every pixel of every image costs, even
+    transparent ones. `chunkedImage` trims empty rows; MSAA is off (`antialiasGL: false`). Screen-fixed overlays at
+    depth 45–99 and full width count as cosmetic for lite mode. Screenshot scripts should pass `&quality=high`.
+11. `R.belly` in `sprites.js` isn't painted directly but is part of the raccoon palette used by `pixelize()`, so it's kept.
 
 ## Testing (`tools/`)
 Dev server on **port 5199**: `npx vite --port 5199`. Browser path auto-detected in `tools/browser.mjs` (Chrome or Edge;
@@ -136,8 +143,8 @@ override with `CHROME=...`).
 - `node tools/flow.mjs`: full solo playthrough (all 15 franui, every world, finale). **Run after any change.**
 - `node tools/mechanics.mjs`: plates/doors, wind, secrets, stomp, creeper, turret, spike, posse.
 - `node tools/duo.mjs`: two pages; lobby, presence, shared franui/checkpoint, lever + crack teamwork, shared creeper, revive,
-  both-at-goal, next world, throw, shared turret, disconnect. (The last check, "continue solo", failed once and then
-  passed 3 runs in a row; if it flakes again, look at a player being a ghost when the partner leaves.)
+  both-at-goal, next world, throw, shared turret, disconnect. Headless runs are slow and
+  flaky: which checks fail changes from run to run (seen on unchanged code too).
 - `node tools/teamwork.mjs`: one player on a duo layout (`?duolevel&char=cat`); checks jumps/climbs vs the obstacles.
 - `node tools/tour.mjs [prefix]`: screenshots of every new feature. `shot.mjs`, `mobile.mjs`, `death.mjs` as before.
 Screenshots go to `shots/` (gitignored).

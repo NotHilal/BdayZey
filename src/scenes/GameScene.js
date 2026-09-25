@@ -8,6 +8,7 @@ import { sfx, music } from '../sfx.js';
 import { Mechanics } from '../mechanics.js';
 import { Player, GRAV } from '../player.js';
 import { duo, DuoLink } from '../duo.js';
+import { quality, fpsWatch, applyLite } from '../quality.js';
 
 const W = 1280, H = 720;
 
@@ -53,8 +54,8 @@ export class GameScene extends Phaser.Scene {
     (world.layers(level) || []).forEach((layer, i) => {
       const lw = Math.ceil(W + (level.width - W) * layer.factor);
       const imgs = chunkedImage(this, `w_layer${i}`, lw, layer.height, (ctx, x0, x1) => layer.paint(ctx, x0, x1, lw), { nearest: layer.nearest });
-      imgs.forEach(({ key, x }) => {
-        this.add.image(x, layer.top, key).setOrigin(0).setScrollFactor(layer.factor, 1).setDepth(-90 + i);
+      imgs.forEach(({ key, x, y }) => {
+        this.add.image(x, layer.top + y, key).setOrigin(0).setScrollFactor(layer.factor, 1).setDepth(-90 + i);
       });
       layer.after?.(this, i);
     });
@@ -62,7 +63,7 @@ export class GameScene extends Phaser.Scene {
     // --- whatever lies at the bottom of pits (water, river, canyon...)
     if (world.pitFill) {
       chunkedImage(this, 'w_pit', level.width, 200, (ctx, x0, x1) => world.pitFill(ctx, x0, x1), {})
-        .forEach(({ key, x }) => this.add.image(x, H - 200, key).setOrigin(0).setDepth(-1));
+        .forEach(({ key, x, y }) => this.add.image(x, H - 200 + y, key).setOrigin(0).setDepth(-1));
     }
 
     // --- terrain (painted once, in chunks). Secret alcoves are painted as solid
@@ -72,7 +73,7 @@ export class GameScene extends Phaser.Scene {
       world.paintTerrain(ctx, level.view, x0, x1);
       secrets.forEach((t) => ctx.clearRect(t.c * TILE, TOP + t.r * TILE, t.w * TILE, t.h * TILE));
     }, { nearest: world.pixel !== false })
-      .forEach(({ key, x }) => this.add.image(x, 0, key).setOrigin(0).setDepth(0));
+      .forEach(({ key, x, y }) => this.add.image(x, y, key).setOrigin(0).setDepth(0));
 
     // --- collision: horizontal runs of solid cells, and runs of the same width in
     // consecutive rows merged into one tall body, so wall faces have no seams to
@@ -194,6 +195,10 @@ export class GameScene extends Phaser.Scene {
 
     this.events.once('shutdown', () => this.cleanup());
 
+    // weak GPUs: drop the cosmetic overlays (see quality.js)
+    if (quality.lite) applyLite(this);
+    this.watchFps = this.mode === 'play' ? fpsWatch() : null;
+
     if (this.mode === 'play') {
       music.play(world.key);
       ui.worldStart(this.worldIndex, world);
@@ -248,6 +253,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(time, delta) {
+    if (this.watchFps?.(delta)) applyLite(this);
     delta = Math.min(delta, 50);
     const playing = this.mode === 'play' && !this.dead && !this.done;
     const m = this.mech.update(delta, playing ? this.player : null);

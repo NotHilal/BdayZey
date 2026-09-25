@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { net } from './net.js';
-import { ui } from './ui.js';
+import { ui, IRIS_MS } from './ui.js';
 import { sfx } from './sfx.js';
 import { CHARACTERS } from './art/sprites.js';
 import { makeCanvas, addTexture, glow } from './art/util.js';
@@ -12,6 +12,8 @@ import { makeCanvas, addTexture, glow } from './art/util.js';
 const SEND_MS = 60;
 const DELAY_MS = 100;
 const LOST_MS = 8000; // the relay reconnects by itself; only give up on longer gaps
+const GHOST_LINGER = 0.8, GHOST_SPEED = 110; // ghost bubble: s at the death spot, then px/s toward the partner
+// (no timeout: a bubble waits until it's popped, or both are down)
 const other = (c) => (c === 'cat' ? 'raccoon' : 'cat');
 
 export const duo = {
@@ -81,7 +83,7 @@ export const duo = {
     ui.partnerLost(true);
   },
 
-  // stop playing together (after a disconnect, or leaving the lobby)
+  // stop playing together (leaving the lobby, or starting a solo game)
   reset() {
     this._offs.forEach((off) => off());
     this._offs = [];
@@ -143,7 +145,7 @@ export class DuoLink {
     ai.emit = (k, d) => this.send('fx', { ...d, k });
     this.sendT = 0;
     this.ghost = null;
-    this.atGoal = false; this.partnerAtGoal = false; this.waitT = 0; this.won = false;
+    this.atGoal = false; this.partnerAtGoal = false; this.waitT = 0; this.won = false; this.wiping = false;
     this.actionPrev = false; this.reviveT = 0; this.lastHeadX = null;
 
     // stomps are shared: wrap each enemy so a local stomp is announced
@@ -184,7 +186,7 @@ export class DuoLink {
   // ------------------------------------------------------------ franui
   touchSweet(s) {
     const i = this.scene.sweets.indexOf(s);
-    if (duo.host || duo.lost) { this.hostCollect(i); return; }
+    if (duo.host) { this.hostCollect(i); return; }
     const now = performance.now();
     if (s.pending && now - s.pending < 1000) return;
     s.pending = now;
@@ -202,9 +204,11 @@ export class DuoLink {
   // called when the local player dies; returns true if we float as a ghost
   becomeGhost(x, y) {
     const partner = this.partnerState();
-    if (duo.lost || !partner || partner.g || partner.goal) return false;
-    this.ghost = { x, y, t: 0 };
-    this.myBubble.setPosition(x, y).setVisible(true).setScale(0.3);
+    // (if the partner is a bubble too, both are down: update() plays the circle wipe)
+    if (!partner || partner.goal) return false;
+    // (a fall into a pit starts the bubble at the edge of the screen, not below it)
+    this.ghost = { x, y: Math.min(y, 460), t: 0 };
+    this.myBubble.setPosition(x, this.ghost.y).setVisible(true).setScale(0.3);
     this.scene.tweens.add({ targets: this.myBubble, scale: 1, duration: 300, ease: 'Back.out' });
     ui.toast('WAIT FOR YOUR PARTNER TO POP YOUR BUBBLE');
     return true;
@@ -212,12 +216,32 @@ export class DuoLink {
 
   revived() {
     if (!this.ghost) return;
-    // come back where the bubble is: right next to the partner who popped it
-    const x = this.myBubble.x, y = this.myBubble.y;
+    // come back next to the partner who popped it (the bubble itself may hang over a pit)
+    const r = this.partnerState();
+    const [x, y] = r && !r.g ? [r.x, r.y + 42] : [this.myBubble.x, this.myBubble.y + 40];
     this.ghost = null;
     this.myBubble.setVisible(false);
     sfx.checkpoint();
-    this.scene.respawnAt(x, y + 40, false);
+    this.scene.respawnAt(x, y, false);
+  }
+
+  // both players are bubbles: the screen closes in a circle on my bubble, I'm
+  // back at the last checkpoint, and it opens again on me. The partner's client
+  // does the same (checkpoints are shared, so they come back at the same one).
+  bothDown() {
+    this.wiping = true;
+    const sc = this.scene, cam = sc.cameras.main;
+    const at = (x, y) => [(x - cam.scrollX) / cam.width, (y - cam.scrollY) / cam.height];
+    sc.time.delayedCall(500, () => {
+      const g = this.ghost;
+      ui.iris(true, ...(g ? at(g.x, g.y) : [0.5, 0.5]));
+      sc.time.delayedCall(IRIS_MS + 250, () => {
+        if (this.ghost) this.ghostRespawn();
+        cam.centerOn(sc.player.x, sc.player.y);
+        // open a frame later, once the camera has settled on the checkpoint
+        sc.time.delayedCall(60, () => { ui.iris(false, ...at(sc.player.x, sc.player.y)); this.wiping = false; });
+      });
+    });
   }
 
   ghostRespawn() {
@@ -248,7 +272,6 @@ export class DuoLink {
   reachGoal() {
     if (this.atGoal) return;
     const sc = this.scene, p = sc.player;
-    if (duo.lost) { sc.win(); return; }
     this.atGoal = true; this.waitT = 0;
     sc.done = true;
     p.body.setVelocity(0, 0);
@@ -259,7 +282,7 @@ export class DuoLink {
   }
 
   checkBothAtGoal() {
-    if (this.won || !this.atGoal || !(this.partnerAtGoal || duo.lost)) return false;
+    if (this.won || !this.atGoal || !this.partnerAtGoal) return false;
     this.won = true;
     this.scene.win();
     return true;
@@ -280,7 +303,7 @@ export class DuoLink {
       const g = this.ghost;
       this.send('state', {
         x: Math.round(p.x), y: Math.round(p.y), a: sc.me.anim, f: p.flipX ? 1 : 0,
-        g: g ? 1 : 0, gx: g ? Math.round(this.myBubble.x) : 0, gy: g ? Math.round(this.myBubble.y) : 0,
+        g: g ? 1 : 0, gx: g ? Math.round(g.x) : 0, gy: g ? Math.round(g.y) : 0,
         goal: this.atGoal ? 1 : 0, vis: p.visible ? 1 : 0,
       });
     }
@@ -322,17 +345,19 @@ export class DuoLink {
       ui.toast('PARTNER REVIVED!');
     }
 
-    // my ghost bubble floats after the partner
+    // my ghost bubble lingers where I died, then drifts slowly over to the partner
+    // (the spot may be out of reach, e.g. deep in a pit)
     if (this.ghost) {
-      this.ghost.t += dt;
-      const bub = this.myBubble;
-      if (partnerAlive) {
-        bub.x += (r.x - bub.x) * Math.min(1, dt * 1.6);
-        bub.y += (r.y - 110 - bub.y) * Math.min(1, dt * 1.6);
+      const g = this.ghost;
+      g.t += dt;
+      if (partnerAlive && g.t > GHOST_LINGER) {
+        const dx = r.x - g.x, dy = r.y - 110 - g.y, d = Math.hypot(dx, dy);
+        const step = Math.min(d, GHOST_SPEED * dt);
+        if (d > 0) { g.x += (dx / d) * step; g.y += (dy / d) * step; }
       }
-      bub.y += Math.sin(now / 280) * 0.4;
-      // both down (or waited too long): everyone back to the checkpoint
-      if ((r && r.g && this.ghost.t > 0.8) || this.ghost.t > 20 || duo.lost) this.ghostRespawn();
+      this.myBubble.setPosition(g.x, g.y + Math.sin(now / 300) * 4);
+      // both down: circle wipe, then back to the checkpoint
+      if (r && r.g && !this.wiping) this.bothDown();
     }
 
     // action key (E / ✋) does what fits where you stand: call the partner from the
@@ -383,9 +408,7 @@ export class DuoLink {
 
     this.drawArrow(r, partnerAlive);
 
-    // host: share the clock and the enemy states. If the host is gone, the guest
-    // takes over running the enemies itself.
-    sc.mech.ai.follow = !duo.host && !duo.lost;
+    // host: share the clock and the enemy states
     if (duo.host) {
       if ((this.clockT -= delta) <= 0) { this.clockT = 500; this.send('clock', { t: Math.round(sc.mech.t) }); }
       if ((this.foesT -= delta) <= 0) {

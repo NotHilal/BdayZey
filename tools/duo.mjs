@@ -147,9 +147,10 @@ check('guest gets the host turret shots', await until(B, () => (window.__game.li
 // --- disconnect
 await B.close();
 check('host notices the partner left', await until(A, () => !document.getElementById('lostOverlay').hidden, 9000));
-await click(A, '#soloBtn');
-check('continue solo resumes the game', await until(A, () => document.getElementById('lostOverlay').hidden && window.__game.sys.isActive() && !window.__game.link, 4000),
-  await A.evaluate(() => JSON.stringify({ overlay: document.getElementById('lostOverlay').hidden, active: window.__game.sys.isActive(), paused: window.__game.sys.isPaused(), link: !!window.__game.link, screen: window.__ui.screen, dead: window.__game.dead })));
+// duo never turns into solo: the level just stops and waits
+await sleep(1500);
+check('the level stays paused, still in duo', await A.evaluate(() => window.__game.sys.isPaused() && !!window.__game.link && !document.getElementById('lostOverlay').hidden),
+  await A.evaluate(() => JSON.stringify({ overlay: !document.getElementById('lostOverlay').hidden, paused: window.__game.sys.isPaused(), link: !!window.__game.link })));
 
 console.log('errors:', errs.length ? errs : 'none');
 console.log(fails ? `${fails} FAILED` : 'all passed');

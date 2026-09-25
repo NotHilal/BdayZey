@@ -19,7 +19,9 @@ new Phaser.Game({
   backgroundColor: '#000000',
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
   physics: { default: 'arcade', arcade: { gravity: { y: 2000 }, debug } },
-  render: { antialias: true, roundPixels: true },
+  // antialiasGL (multisampling) only smooths polygon edges and costs a lot of
+  // fill rate on weak GPUs; laptops with two GPUs should use the faster one
+  render: { antialias: true, antialiasGL: false, roundPixels: true, powerPreference: 'high-performance' },
   input: { activePointers: 3 },
   fps: { forceSetTimeOut: timer, target: (import.meta.env.DEV && +params.get('fps')) || 60 },
   scene: [BootScene, GameScene],

@@ -12,6 +12,8 @@ let franuiURL = '';
 let toastTimer = null;
 let clearTimer = null;
 let finaleCycle = null;
+let irisTimer = null;
+export const IRIS_MS = 1200; // how long the circle takes to close (#iris.closing in style.css)
 let screen = 'title'; // title | play | clear | finale
 
 function scene() { return game.scene.getScene('game'); }
@@ -124,7 +126,6 @@ export const ui = {
       const link = `${location.origin}${location.pathname}?room=${duo.code}`;
       try { await navigator.clipboard.writeText(link); $('copyBtn').textContent = 'COPIED ✓'; } catch { $('copyBtn').textContent = link; }
     });
-    $('soloBtn').addEventListener('click', () => { duo.reset(); this.partnerLost(false); });
     // messages that move both players through the screens together
     net.on('start', () => { if (screen === 'title' && duo.connected) this.beginDuo(); });
     // the partner may press "next" before our own clear screen is up: remember it
@@ -202,6 +203,7 @@ export const ui = {
     show('tAct', duo.active);
     this.partnerChip();
     this.countdown(null);
+    this.iris(null);
     document.documentElement.style.setProperty('--accent', world.accent);
     $('hudWorld').textContent = `${i + 1} · ${world.name}`;
     this.sweets(0);
@@ -219,6 +221,20 @@ export const ui = {
     el.innerHTML = `<small>${label}</small>${sec.toFixed(1)}`;
   },
   deaths(n) { $('hudDeaths').textContent = '💀 ' + n; },
+
+  // circle wipe centred on (x, y) as fractions of the screen: close = shrink to
+  // black (takes IRIS_MS), otherwise grow back open; null hides it at once.
+  iris(close, x = 0.5, y = 0.5) {
+    const el = $('iris');
+    clearTimeout(irisTimer);
+    if (close == null) { el.hidden = true; return; }
+    el.style.left = x * 100 + '%'; el.style.top = y * 100 + '%';
+    el.className = '';
+    el.hidden = false;
+    void el.offsetWidth; // restart the animation
+    el.className = close ? 'closing' : 'opening';
+    if (!close) irisTimer = setTimeout(() => { el.hidden = true; el.className = ''; }, 750);
+  },
 
   toast(msg) {
     const t = $('toast');
@@ -252,7 +268,8 @@ export const ui = {
   },
 
   next(fromPartner = false) {
-    if (screen !== 'clear') return;
+    // duo never goes on alone: wait for the partner to come back first
+    if (screen !== 'clear' || (duo.active && duo.lost)) return;
     if (duo.active && !fromPartner) net.send('next', { i: this.clearIndex });
     show('clearOverlay', false);
     const n = this.clearIndex + 1;
@@ -263,6 +280,7 @@ export const ui = {
   finale() {
     screen = 'finale';
     music.play('birthday');
+    this.iris(null);
     show('hud', false);
     show('touch', false);
     const total = WORLDS.length * 3;
@@ -293,6 +311,7 @@ export const ui = {
   },
 
   replay(fromPartner = false) {
+    if (duo.active && duo.lost) return;
     if (duo.active && !fromPartner) net.send('replay');
     clearInterval(finaleCycle);
     show('finaleOverlay', false);

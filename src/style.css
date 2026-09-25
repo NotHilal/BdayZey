@@ -87,6 +87,27 @@ body {
 @keyframes pulse { 50% { color: #fff; } }
 @media (prefers-reduced-motion: reduce) { #countdown.urgent { animation: none; } }
 
+/* circle wipe (duo: both players down); the hole is the element, the black is its shadow */
+#iris {
+  position: absolute; left: 50%; top: 50%; width: 240cqw; height: 240cqw;
+  transform: translate(-50%, -50%); border-radius: 50%;
+  box-shadow: 0 0 0 240cqw #000; pointer-events: none;
+}
+#iris[hidden] { display: none; }
+/* closes onto the character, holds on a small circle, then shuts (1.2s = IRIS_MS in ui.js) */
+#iris.closing { animation: iris-close 1.2s forwards; }
+#iris.opening { animation: iris-open .7s ease-in forwards; }
+@keyframes iris-close {
+  0% { width: 240cqw; height: 240cqw; animation-timing-function: ease-in; }
+  55% { width: 10cqw; height: 10cqw; }
+  82% { width: 10cqw; height: 10cqw; animation-timing-function: ease-in; }
+  100% { width: 0; height: 0; }
+}
+@keyframes iris-open {
+  from { width: 0; height: 0; }
+  to { width: 240cqw; height: 240cqw; }
+}
+
 /* ---------------- Overlays ---------------- */
 .overlay {
   position: absolute; inset: 0;

@@ -21,7 +21,7 @@ page.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('404'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 for (const [name, world, x, wait, hold] of SPOTS) {
   if (filter && !name.startsWith(filter)) continue;
-  await page.goto(`http://localhost:5199/?world=${world}&x=${x}`, { waitUntil: 'networkidle0' });
+  await page.goto(`http://localhost:5199/?world=${world}&x=${x}&quality=high`, { waitUntil: 'networkidle0' });
   await sleep(wait);
   if (hold) { await page.keyboard.down('ArrowRight'); await sleep(hold); await page.keyboard.up('ArrowRight'); await sleep(150); }
   await page.screenshot({ path: `shots/tour-${name}.png` });
